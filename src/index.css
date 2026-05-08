@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+:root {
+  --color-healthy: #34d399;
+  --color-anomaly: #f5b942;
+  --color-incident: #ef4444;
+  --color-action: #ffffff;
+  --color-bg: #000000;
+  --color-divider: rgba(255, 255, 255, 0.08);
+  --color-subtle: rgba(255, 255, 255, 0.06);
+  --font-system: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, monospace;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-system);
+  background: transparent;
+  color: white;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+/* Subtle scrollbar for dark mode */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  background-clip: padding-box;
+  border-radius: 10px;
+  border: 3px solid transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}

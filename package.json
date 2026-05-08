@@ -1,0 +1,57 @@
+{
+  "name": "vitals",
+  "version": "1.0.0",
+  "description": "Observability cockpit in the MacBook notch",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev:renderer": "vite",
+    "dev:electron": "tsc -p tsconfig.electron.json && NODE_ENV=development electron .",
+    "start": "bash scripts/dev.sh",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "npm run build:renderer && npm run build:electron",
+    "dist": "npm run build && electron-builder"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "electron-store": "^11.0.2",
+    "framer-motion": "^12.38.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.8.1",
+    "tailwindcss": "^4.2.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.11"
+  },
+  "build": {
+    "appId": "com.vitals.app",
+    "productName": "Vitals",
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "files": [
+      "dist-electron/**/*",
+      "dist-renderer/**/*"
+    ]
+  }
+}

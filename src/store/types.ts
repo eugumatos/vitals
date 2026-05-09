@@ -46,12 +46,23 @@ export interface TimelineEntry {
   severity: 'info' | 'warning' | 'critical';
 }
 
+export interface ServiceSnapshotData {
+  data: any;
+  timestamp: string;
+}
+
 export interface HoverData {
   errorRate: { value: string; trend: 'up' | 'down' | 'stable' };
   conversion: { value: string; trend: 'up' | 'down' | 'stable' };
   eventsPerMin: { value: string; trend: 'up' | 'down' | 'stable' };
   vercel: VercelData | null;
   sentry: SentryData | null;
+  openai: ServiceSnapshotData | null;
+  anthropic: ServiceSnapshotData | null;
+  datadog: ServiceSnapshotData | null;
+  posthog: ServiceSnapshotData | null;
+  segment: ServiceSnapshotData | null;
+  chrome: ServiceSnapshotData | null;
   github: {
     prs: Array<{
       number: number;
@@ -153,6 +164,23 @@ export interface SentryData {
     unresolvedCount: number;
     newIssues24h: number;
   };
+}
+
+export interface AIUsageData {
+  usage: {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalRequests: number;
+    totalCost: number;
+    byModel: Array<{
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      requests: number;
+    }>;
+  };
+  periodStart: string;
+  periodEnd: string;
 }
 
 export interface ConnectorConfig {

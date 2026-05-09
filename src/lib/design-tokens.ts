@@ -2,6 +2,7 @@ export const colors = {
   healthy: '#34d399',
   anomaly: '#f5b942',
   incident: '#ef4444',
+  info: '#60a5fa',
   action: '#ffffff',
   bg: '#000000',
   divider: 'rgba(255, 255, 255, 0.08)',
@@ -17,10 +18,10 @@ export const fonts = {
 } as const;
 
 export const fontSize = {
-  labelSecondary: 12,
-  body: 13,
-  bodyLarge: 13.5,
-  title: 15,
+  labelSecondary: 13,
+  body: 14,
+  bodyLarge: 14.5,
+  title: 16,
 } as const;
 
 export const spacing = {
@@ -35,12 +36,19 @@ export const spacing = {
 // Expanded states grow downward from the notch.
 export const stateDimensions = {
   resting: { width: 300, height: 32 },
-  hover: { width: 420, height: 270 },
-  anomaly: { width: 480, height: 340 },
-  incident: { width: 500, height: 360 },
-  deploy_verified: { width: 380, height: 150 },
-  onboarding: { width: 420, height: 300 },
-  settings: { width: 500, height: 410 },
+  hover: { width: 580, height: 180 },
+  anomaly: { width: 580, height: 200 },
+  incident: { width: 580, height: 220 },
+  deploy_verified: { width: 580, height: 140 },
+  onboarding: { width: 580, height: 200 },
+  settings: { width: 580, height: 240 },
+} as const;
+
+export const radius = {
+  sm: 6,
+  md: 10,
+  lg: 14,
+  pill: 999,
 } as const;
 
 export const springTransition = {

@@ -22,12 +22,14 @@
     "framer-motion": "^12.38.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "ws": "^8.20.0",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "electron": "^42.0.0",
     "electron-builder": "^26.8.1",
     "tailwindcss": "^4.2.4",
@@ -41,7 +43,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64", "x64"]
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         }
       ],
       "category": "public.app-category.developer-tools",

@@ -2,8 +2,10 @@ import { useVitalsStore } from '../../store/useVitalsStore';
 import { colors, fontSize, spacing, fonts } from '../../lib/design-tokens';
 
 export function DeployVerified() {
-  const { deployVerified } = useVitalsStore();
-  if (!deployVerified) return null;
+  const restingDeploy = useVitalsStore((s) => s.restingDeploy);
+  const hasData = restingDeploy.sha.length > 0;
+
+  if (!hasData) return null;
 
   return (
     <div
@@ -23,11 +25,11 @@ export function DeployVerified() {
             width: 7,
             height: 7,
             borderRadius: '50%',
-            backgroundColor: colors.healthy,
+            backgroundColor: restingDeploy.status === 'success' ? colors.healthy : restingDeploy.status === 'failure' ? colors.incident : colors.anomaly,
           }}
         />
-        <span style={{ fontSize: fontSize.title, color: colors.healthy }}>
-          Deploy verified
+        <span style={{ fontSize: fontSize.title, color: restingDeploy.status === 'success' ? colors.healthy : restingDeploy.status === 'failure' ? colors.incident : colors.anomaly }}>
+          {restingDeploy.status === 'success' ? 'Deploy verified' : restingDeploy.status === 'failure' ? 'Deploy failed' : 'Deploying…'}
         </span>
       </div>
 
@@ -50,81 +52,23 @@ export function DeployVerified() {
             borderRadius: 3,
           }}
         >
-          {deployVerified.sha}
+          {restingDeploy.sha}
         </span>
-        <span
-          style={{
-            fontSize: fontSize.body,
-            color: colors.textSecondary,
-          }}
-        >
-          {deployVerified.message}
+        <span style={{ fontSize: fontSize.body, color: colors.textSecondary }}>
+          {restingDeploy.time}
         </span>
       </div>
 
-      <div style={{ display: 'flex', gap: 16 }}>
+      {restingDeploy.repo && (
         <div>
-          <span
-            style={{
-              fontSize: fontSize.labelSecondary,
-              color: colors.textTertiary,
-              textTransform: 'lowercase',
-            }}
-          >
-            project
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase' }}>
+            repo
           </span>
-          <div
-            style={{
-              fontSize: fontSize.body,
-              color: colors.textPrimary,
-              marginTop: 1,
-            }}
-          >
-            {deployVerified.project}
+          <div style={{ fontSize: fontSize.body, color: colors.textPrimary, marginTop: 1, fontFamily: fonts.mono }}>
+            {restingDeploy.repo}
           </div>
         </div>
-        <div>
-          <span
-            style={{
-              fontSize: fontSize.labelSecondary,
-              color: colors.textTertiary,
-              textTransform: 'lowercase',
-            }}
-          >
-            build time
-          </span>
-          <div
-            style={{
-              fontSize: fontSize.body,
-              color: colors.textPrimary,
-              fontVariantNumeric: 'tabular-nums',
-              marginTop: 1,
-            }}
-          >
-            {deployVerified.duration}
-          </div>
-        </div>
-        <div>
-          <span
-            style={{
-              fontSize: fontSize.labelSecondary,
-              color: colors.textTertiary,
-              textTransform: 'lowercase',
-            }}
-          >
-            deployed
-          </span>
-          <div
-            style={{
-              fontSize: fontSize.body,
-              color: colors.textPrimary,
-              marginTop: 1,
-            }}
-          >
-            {deployVerified.timestamp}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

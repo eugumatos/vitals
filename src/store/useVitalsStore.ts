@@ -8,6 +8,7 @@ import {
   emptyHoverData,
   mockConnectors,
 } from './mockData';
+import { formatTimeAgoLong } from '../lib/utils';
 
 export interface DeviceFlowState {
   step: 'idle' | 'client_id' | 'waiting';
@@ -19,6 +20,8 @@ export interface DeviceFlowState {
 interface VitalsStore {
   state: VitalsState;
   previousState: VitalsState;
+  /** State to restore on next mouseenter — written once on mouseleave, read once on mouseenter */
+  returnState: VitalsState | null;
   hoverData: HoverData;
   connectors: ConnectorConfig[];
   restingMetric: { label: string; value: string };
@@ -26,7 +29,10 @@ interface VitalsStore {
   lastPolledAt: Date | null;
   pollingIntervalSec: number;
   deviceFlow: DeviceFlowState;
-  activeIntegration: string; // 'github' | 'vercel' | 'sentry' | etc.
+  activeIntegration: string;
+  serviceErrors: Record<string, string | null>;
+  restingMode: 'carousel' | 'vitals' | 'fixed';
+  isSilenced: boolean;
 
   setState: (state: VitalsState) => void;
   setActiveIntegration: (id: string) => void;
@@ -35,25 +41,18 @@ interface VitalsStore {
   updateGitHubSnapshot: (data: any) => void;
   updateVercelSnapshot: (data: any) => void;
   updateSentrySnapshot: (data: any) => void;
+  updateServiceSnapshot: (service: string, data: any) => void;
+  setServiceError: (service: string, error: string | null) => void;
   updateConnectorStatus: (status: Record<string, boolean>) => void;
   setConnectorConnected: (id: string, connected: boolean) => void;
   setDeviceFlow: (update: Partial<DeviceFlowState>) => void;
   resetDeviceFlow: () => void;
 }
 
-function formatTimeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}min ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
 export const useVitalsStore = create<VitalsStore>((set, get) => ({
   state: 'resting',
   previousState: 'resting',
+  returnState: null,
   hoverData: emptyHoverData,
   connectors: mockConnectors,
   restingMetric: { label: '', value: '' },
@@ -62,6 +61,9 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
   pollingIntervalSec: 30,
   deviceFlow: { step: 'idle', clientId: '', userCode: '', error: null },
   activeIntegration: 'github',
+  serviceErrors: {},
+  restingMode: 'carousel',
+  isSilenced: false,
 
   setActiveIntegration: (id: string) => {
     set({ activeIntegration: id });
@@ -74,22 +76,34 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
 
   setHover: () => {
     const current = get().state;
-    const prev = get().previousState;
-    if (current === 'resting') {
-      // If user was in an expanded state before, restore it instead of going to hover
-      if (prev !== 'resting' && prev !== 'hover') {
-        set({ state: prev, previousState: 'resting' });
-      } else {
-        set({ state: 'hover', previousState: current });
-      }
+    if (current !== 'resting') return;
+
+    // If nothing is connected, go to settings so user can integrate
+    const hasAnyConnected = get().connectors.some((c) => c.connected);
+    if (!hasAnyConnected) {
+      set({ state: 'settings', previousState: 'resting', returnState: null });
+      return;
+    }
+
+    // Restore the state the user was in before collapsing
+    const restore = get().returnState;
+    if (restore && restore !== 'resting' && restore !== 'hover') {
+      set({ state: restore, previousState: 'resting', returnState: null });
+    } else {
+      set({ state: 'hover', previousState: 'resting', returnState: null });
     }
   },
 
   setResting: () => {
     const current = get().state;
-    if (current !== 'resting') {
-      set({ state: 'resting', previousState: current });
-    }
+    if (current === 'resting') return;
+    // Only capture returnState on the first collapse — ignore bouncing events during CSS transition
+    const existingReturn = get().returnState;
+    set({
+      state: 'resting',
+      previousState: current,
+      returnState: existingReturn ?? current,
+    });
   },
 
   updateGitHubSnapshot: (data: any) => {
@@ -125,7 +139,7 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
           sha: latestRun.sha,
           fullSha: latestRun.fullSha,
           repo: latestRun.repoFullName || `${latestRun.repo}`,
-          time: formatTimeAgo(latestRun.updatedAt).replace(' ago', '').replace('min', 'm').replace('just now', 'now'),
+          time: formatTimeAgoLong(latestRun.updatedAt).replace(' ago', '').replace('min', 'm').replace('just now', 'now'),
           status: (latestRun.conclusion === 'failure' ? 'failure' : latestRun.conclusion === 'success' ? 'success' : 'building') as 'success' | 'failure' | 'building',
         }
       : get().restingDeploy;
@@ -150,7 +164,7 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
             sha: latestCommit.sha,
             fullSha: latestCommit.fullSha,
             repo: latestCommit.repoFullName,
-            time: formatTimeAgo(latestCommit.date).replace(' ago', '').replace('min', 'm').replace('just now', 'now'),
+            time: formatTimeAgoLong(latestCommit.date).replace(' ago', '').replace('min', 'm').replace('just now', 'now'),
             status: 'success' as const,
           }
         : get().restingDeploy;
@@ -193,6 +207,27 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
       hoverData: { ...current, sentry: data, errorRate },
       lastPolledAt: new Date(),
     });
+  },
+
+  updateServiceSnapshot: (service: string, data: any) => {
+    if (!data) return;
+    const current = get().hoverData;
+    const validServices = ['openai', 'anthropic', 'datadog', 'posthog', 'segment', 'chrome'] as const;
+    if (!validServices.includes(service as any)) return;
+    set({
+      hoverData: {
+        ...current,
+        [service]: { data, timestamp: new Date().toISOString() },
+      },
+      lastPolledAt: new Date(),
+      serviceErrors: { ...get().serviceErrors, [service]: null },
+    });
+  },
+
+  setServiceError: (service: string, error: string | null) => {
+    set((prev) => ({
+      serviceErrors: { ...prev.serviceErrors, [service]: error },
+    }));
   },
 
   updateConnectorStatus: (status: Record<string, boolean>) => {

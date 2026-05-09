@@ -2,18 +2,9 @@ import { useState } from 'react';
 import { useVitalsStore } from '../../store/useVitalsStore';
 import { colors, fontSize, spacing, fonts } from '../../lib/design-tokens';
 import { SkeletonList, Skeleton } from '../ui/Skeleton';
+import { formatTimeAgo } from '../../lib/utils';
 
 type EnvFilter = 'all' | 'production' | 'preview';
-
-function formatTimeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
 
 function StatusDot({ color }: { color: string }) {
   return <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: color, flexShrink: 0 }} />;
@@ -53,6 +44,7 @@ export function Hover() {
   const { github, vercel } = hoverData;
   const githubConnected = connectors.find((c) => c.id === 'github')?.connected;
   const vercelConnected = connectors.find((c) => c.id === 'vercel')?.connected;
+  const activeConnected = connectors.find((c) => c.id === activeIntegration)?.connected;
 
   const [envFilter, setEnvFilter] = useState<EnvFilter>('all');
 
@@ -63,8 +55,30 @@ export function Hover() {
   const hasVercelData = vercel && vercel.deployments.length > 0;
   const lastPolledAt = useVitalsStore((s) => s.lastPolledAt);
 
-  const isConnected = activeIntegration === 'vercel' ? vercelConnected : githubConnected;
-  const hasData = activeIntegration === 'vercel' ? hasVercelData : hasGitHubData;
+  // Generic service data
+  const genericServices = ['openai', 'datadog', 'posthog', 'segment'] as const;
+  const isGenericService = genericServices.includes(activeIntegration as any);
+  const serviceSnapshot = isGenericService ? hoverData[activeIntegration as typeof genericServices[number]] : null;
+  const hasServiceData = serviceSnapshot?.data != null;
+
+  // Anthropic (Claude Code) data
+  const isAnthropic = activeIntegration === 'anthropic';
+  const anthropicSnapshot = isAnthropic ? hoverData.anthropic : null;
+  const hasAnthropicData = anthropicSnapshot?.data?.totals != null;
+
+  // Chrome data
+  const isChrome = activeIntegration === 'chrome';
+  const chromeSnapshot = isChrome ? hoverData.chrome : null;
+  const hasChromeData = chromeSnapshot?.data != null;
+
+  const isConnected = activeIntegration === 'vercel' ? vercelConnected
+    : activeIntegration === 'github' ? githubConnected
+    : activeConnected;
+  const hasData = activeIntegration === 'vercel' ? hasVercelData
+    : activeIntegration === 'github' ? hasGitHubData
+    : isChrome ? hasChromeData
+    : isAnthropic ? hasAnthropicData
+    : hasServiceData;
   const isLoading = isConnected && !hasData && !lastPolledAt;
 
   // Loading skeleton
@@ -74,9 +88,9 @@ export function Hover() {
         <Skeleton width={80} height={10} style={{ marginBottom: spacing.sectionGap }} />
         <SkeletonList rows={4} />
         <div style={{ marginTop: spacing.sectionGap, display: 'flex', gap: 14 }}>
-          <Skeleton width={60} height={24} borderRadius={4} />
-          <Skeleton width={60} height={24} borderRadius={4} />
-          <Skeleton width={60} height={24} borderRadius={4} />
+          <Skeleton width={60} height={24} borderRadius={8} />
+          <Skeleton width={60} height={24} borderRadius={8} />
+          <Skeleton width={60} height={24} borderRadius={8} />
         </div>
       </div>
     );
@@ -98,17 +112,21 @@ export function Hover() {
         }}
       >
         <div style={{ fontSize: fontSize.body, color: colors.textTertiary }}>
-          {activeIntegration === 'vercel'
-            ? (!vercelConnected ? 'connect vercel to see deploys' : 'no recent deploys')
-            : (!githubConnected ? 'connect github to see your repos' : 'no activity on watched repos')}
+          {!isConnected
+            ? `connect ${activeIntegration} to see data`
+            : activeIntegration === 'vercel'
+              ? 'no recent deploys'
+              : activeIntegration === 'github'
+                ? 'no activity on watched repos'
+                : 'no data available'}
         </div>
-        {(!githubConnected || (activeIntegration === 'vercel' && !vercelConnected)) && (
+        {!isConnected && (
           <button
             onClick={() => setState('settings')}
             style={{
               background: colors.subtle,
               border: 'none',
-              borderRadius: 5,
+              borderRadius: 8,
               color: colors.action,
               fontSize: fontSize.labelSecondary,
               padding: '4px 12px',
@@ -175,7 +193,7 @@ export function Hover() {
                   fontFamily: fonts.mono,
                   background: colors.subtle,
                   padding: '1px 4px',
-                  borderRadius: 3,
+                  borderRadius: 6,
                   flexShrink: 0,
                   maxWidth: 110,
                   whiteSpace: 'nowrap',
@@ -228,7 +246,7 @@ export function Hover() {
                   fontFamily: fonts.mono,
                   background: colors.subtle,
                   padding: '1px 4px',
-                  borderRadius: 3,
+                  borderRadius: 6,
                 }}
               >
                 {run.sha}
@@ -240,7 +258,7 @@ export function Hover() {
                   fontFamily: fonts.mono,
                   background: colors.subtle,
                   padding: '1px 4px',
-                  borderRadius: 3,
+                  borderRadius: 6,
                   maxWidth: 90,
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
@@ -294,7 +312,7 @@ export function Hover() {
                 style={{
                   background: colors.subtle,
                   border: 'none',
-                  borderRadius: 3,
+                  borderRadius: 6,
                   padding: '1px 4px',
                   fontSize: fontSize.labelSecondary,
                   color: colors.textSecondary,
@@ -344,7 +362,7 @@ export function Hover() {
                   style={{
                     background: envFilter === env ? 'rgba(255,255,255,0.12)' : colors.subtle,
                     border: 'none',
-                    borderRadius: 3,
+                    borderRadius: 6,
                     color: envFilter === env ? colors.action : colors.textTertiary,
                     fontSize: fontSize.labelSecondary,
                     padding: '1px 6px',
@@ -388,7 +406,7 @@ export function Hover() {
                 style={{
                   background: colors.subtle,
                   border: 'none',
-                  borderRadius: 3,
+                  borderRadius: 6,
                   padding: '1px 4px',
                   fontSize: fontSize.labelSecondary,
                   color: colors.action,
@@ -412,6 +430,21 @@ export function Hover() {
         </div>
         );
       })()}
+
+      {/* Claude Code analytics */}
+      {isAnthropic && hasAnthropicData && (
+        <ClaudeCodeView data={anthropicSnapshot!.data} />
+      )}
+
+      {/* Generic service data (OpenAI, Datadog, PostHog, Segment) */}
+      {isGenericService && hasServiceData && (
+        <GenericServiceView service={activeIntegration} data={serviceSnapshot!.data} />
+      )}
+
+      {/* Chrome logs */}
+      {isChrome && hasChromeData && (
+        <ChromeLogsView data={chromeSnapshot!.data} />
+      )}
 
       {/* bottom summary */}
       <div
@@ -452,4 +485,264 @@ export function Hover() {
       </div>
     </div>
   );
+}
+
+// Chrome logs view with level filter
+type LogLevel = 'all' | 'error' | 'warning' | 'log' | 'info';
+
+function ChromeLogsView({ data }: { data: any }) {
+  const [filter, setFilter] = useState<LogLevel>('all');
+  const consoleLogs: Array<{ timestamp: number; level: string; text: string }> = data?.console || [];
+  const stats = data?.stats || {};
+
+  const filtered = filter === 'all'
+    ? consoleLogs
+    : consoleLogs.filter((e) => e.level === filter);
+
+  const tabTitle = data?.tabTitle || '';
+  const tabUrl = data?.tabUrl || '';
+  const tabHost = (() => { try { return new URL(tabUrl).host; } catch { return tabUrl; } })();
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Tab info */}
+      {tabTitle && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: spacing.lineGap, overflow: 'hidden' }}>
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {tabTitle}
+          </span>
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1 }}>
+            {tabHost}
+          </span>
+        </div>
+      )}
+      {/* Filter bar */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lineGap }}>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {(['all', 'error', 'warning', 'log', 'info'] as LogLevel[]).map((lvl) => {
+            const count = lvl === 'all' ? consoleLogs.length
+              : consoleLogs.filter((e) => e.level === lvl).length;
+            const active = filter === lvl;
+            return (
+              <button
+                key={lvl}
+                onClick={() => setFilter(lvl)}
+                style={{
+                  background: active ? 'rgba(255,255,255,0.12)' : colors.subtle,
+                  border: 'none',
+                  borderRadius: 6,
+                  color: active
+                    ? (lvl === 'error' ? colors.incident : lvl === 'warning' ? colors.anomaly : colors.action)
+                    : colors.textTertiary,
+                  fontSize: fontSize.labelSecondary,
+                  fontFamily: fonts.mono,
+                  padding: '2px 6px',
+                  cursor: 'pointer',
+                }}
+              >
+                {lvl}{count > 0 ? ` ${count}` : ''}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 8, fontSize: fontSize.labelSecondary }}>
+          {stats.errors > 0 && <span style={{ color: colors.incident }}>{stats.errors} err</span>}
+          {stats.warnings > 0 && <span style={{ color: colors.anomaly }}>{stats.warnings} warn</span>}
+        </div>
+      </div>
+
+      {/* Log entries */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {filtered.length === 0 ? (
+          <div style={{ fontSize: fontSize.body, color: colors.textTertiary, textAlign: 'center', paddingTop: 20 }}>
+            {consoleLogs.length === 0 ? 'no console output yet' : `no ${filter} entries`}
+          </div>
+        ) : (
+          filtered.slice(-25).reverse().map((entry, i) => (
+            <div
+              key={i}
+              style={{
+                display: 'flex',
+                gap: 6,
+                alignItems: 'flex-start',
+                paddingBottom: 3,
+                marginBottom: 3,
+                borderBottom: `0.5px solid ${colors.divider}`,
+              }}
+            >
+              <span style={{
+                fontSize: fontSize.labelSecondary,
+                color: entry.level === 'error' ? colors.incident
+                  : entry.level === 'warning' ? colors.anomaly
+                  : colors.textTertiary,
+                flexShrink: 0,
+                width: 32,
+                fontFamily: fonts.mono,
+              }}>
+                {entry.level === 'error' ? 'ERR' : entry.level === 'warning' ? 'WARN' : entry.level === 'info' ? 'INFO' : 'LOG'}
+              </span>
+              <span style={{
+                fontSize: fontSize.labelSecondary,
+                color: entry.level === 'error' ? colors.incident : colors.textPrimary,
+                fontFamily: fonts.mono,
+                flex: 1,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}>
+                {entry.text}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Claude Code analytics view
+function ClaudeCodeView({ data }: { data: any }) {
+  const totals = data?.totals;
+  if (!totals) return null;
+
+  const costDollars = (totals.totalCostCents || 0) / 100;
+  const acceptRate = totals.editAcceptRate;
+  const models = totals.models || [];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sectionGap - 2 }}>
+      {/* Top stats */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <StatCell label="sessions" value={String(totals.sessions || 0)} />
+        <StatCell label="lines +" value={formatNum(totals.linesAdded || 0)} color={colors.healthy} />
+        <StatCell label="lines −" value={formatNum(totals.linesRemoved || 0)} color={colors.incident} />
+        <StatCell label="commits" value={String(totals.commits || 0)} />
+        <StatCell label="PRs" value={String(totals.pullRequests || 0)} />
+      </div>
+
+      {/* Cost + accept rate */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 16,
+          paddingTop: spacing.lineGap,
+          borderTop: `0.5px solid ${colors.divider}`,
+        }}
+      >
+        <StatCell label="est. cost (7d)" value={`$${costDollars.toFixed(2)}`} />
+        {acceptRate !== null && (
+          <StatCell
+            label="accept rate"
+            value={`${acceptRate}%`}
+            color={acceptRate >= 70 ? colors.healthy : acceptRate >= 50 ? colors.anomaly : colors.incident}
+          />
+        )}
+        <StatCell label="input tokens" value={formatNum(totals.totalInputTokens || 0)} />
+        <StatCell label="output tokens" value={formatNum(totals.totalOutputTokens || 0)} />
+      </div>
+
+      {/* Model breakdown */}
+      {models.length > 0 && (
+        <div style={{ paddingTop: spacing.lineGap, borderTop: `0.5px solid ${colors.divider}` }}>
+          <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginBottom: spacing.lineGap }}>
+            models (7d)
+          </div>
+          {models.map((m: any, i: number) => (
+            <div
+              key={m.model}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                paddingBottom: i < models.length - 1 ? spacing.lineGap : 0,
+                marginBottom: i < models.length - 1 ? spacing.lineGap : 0,
+                borderBottom: i < models.length - 1 ? `0.5px solid ${colors.divider}` : 'none',
+              }}
+            >
+              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textPrimary, fontFamily: fonts.mono }}>
+                {m.model}
+              </span>
+              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums' }}>
+                ${((m.estimatedCostCents || 0) / 100).toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCell({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div>
+      <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>{label}</span>
+      <div style={{ fontSize: fontSize.bodyLarge, color: color || colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function formatNum(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+// Generic view for services that don't have custom UI yet
+function GenericServiceView({ service, data }: { service: string; data: any }) {
+  if (!data || typeof data !== 'object') return null;
+
+  // Try to render known data shapes
+  const entries = flattenData(data, '', 12);
+
+  return (
+    <div style={{ marginBottom: spacing.sectionGap - 2 }}>
+      <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase', marginBottom: spacing.lineGap }}>
+        {service}
+      </div>
+      {entries.map(({ key, value }, i) => (
+        <div
+          key={key}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            paddingBottom: i < entries.length - 1 ? spacing.lineGap : 0,
+            borderBottom: i < entries.length - 1 ? `0.5px solid ${colors.divider}` : 'none',
+            marginBottom: i < entries.length - 1 ? spacing.lineGap : 0,
+          }}
+        >
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>
+            {key}
+          </span>
+          <span style={{ fontSize: fontSize.body, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums', textAlign: 'right', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function flattenData(obj: any, prefix: string, maxItems: number): Array<{ key: string; value: string }> {
+  const result: Array<{ key: string; value: string }> = [];
+  if (!obj || typeof obj !== 'object') return result;
+
+  for (const [k, v] of Object.entries(obj)) {
+    if (result.length >= maxItems) break;
+    const key = prefix ? `${prefix}.${k}` : k;
+
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v)) {
+      result.push({ key, value: `[${v.length} items]` });
+    } else if (typeof v === 'object') {
+      result.push(...flattenData(v, key, maxItems - result.length));
+    } else {
+      result.push({ key, value: String(v) });
+    }
+  }
+  return result;
 }

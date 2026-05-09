@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('vitals', {
   setIgnoreMouseEvents: (ignore: boolean) => {
     ipcRenderer.send('set-ignore-mouse-events', ignore);
   },
+  setWindowBounds: (bounds: { width: number; height: number }) => {
+    ipcRenderer.send('set-window-bounds', bounds);
+  },
 
   // GitHub
   github: {
@@ -72,6 +75,86 @@ contextBridge.exposeInMainWorld('vitals', {
     },
   },
 
+  // OpenAI
+  openai: {
+    setToken: (token: string) => ipcRenderer.invoke('openai:set-token', token),
+    disconnect: () => ipcRenderer.invoke('openai:disconnect'),
+    getSnapshot: () => ipcRenderer.invoke('openai:get-snapshot'),
+    onSnapshot: (callback: (snapshot: any) => void) => {
+      ipcRenderer.on('openai:snapshot', (_event, snapshot) => callback(snapshot));
+    },
+    onError: (callback: (error: string) => void) => {
+      ipcRenderer.on('openai:error', (_event, error) => callback(error));
+    },
+  },
+
+  // Anthropic
+  anthropic: {
+    setToken: (token: string) => ipcRenderer.invoke('anthropic:set-token', token),
+    disconnect: () => ipcRenderer.invoke('anthropic:disconnect'),
+    getSnapshot: () => ipcRenderer.invoke('anthropic:get-snapshot'),
+    onSnapshot: (callback: (snapshot: any) => void) => {
+      ipcRenderer.on('anthropic:snapshot', (_event, snapshot) => callback(snapshot));
+    },
+    onError: (callback: (error: string) => void) => {
+      ipcRenderer.on('anthropic:error', (_event, error) => callback(error));
+    },
+  },
+
+  // PostHog
+  posthog: {
+    setToken: (token: string) => ipcRenderer.invoke('posthog:set-token', token),
+    disconnect: () => ipcRenderer.invoke('posthog:disconnect'),
+    getSnapshot: () => ipcRenderer.invoke('posthog:get-snapshot'),
+    onSnapshot: (callback: (snapshot: any) => void) => {
+      ipcRenderer.on('posthog:snapshot', (_event, snapshot) => callback(snapshot));
+    },
+    onError: (callback: (error: string) => void) => {
+      ipcRenderer.on('posthog:error', (_event, error) => callback(error));
+    },
+  },
+
+  // Segment
+  segment: {
+    setToken: (token: string) => ipcRenderer.invoke('segment:set-token', token),
+    disconnect: () => ipcRenderer.invoke('segment:disconnect'),
+    getSnapshot: () => ipcRenderer.invoke('segment:get-snapshot'),
+    onSnapshot: (callback: (snapshot: any) => void) => {
+      ipcRenderer.on('segment:snapshot', (_event, snapshot) => callback(snapshot));
+    },
+    onError: (callback: (error: string) => void) => {
+      ipcRenderer.on('segment:error', (_event, error) => callback(error));
+    },
+  },
+
+  // Datadog
+  datadog: {
+    setToken: (token: string) => ipcRenderer.invoke('datadog:set-token', token),
+    disconnect: () => ipcRenderer.invoke('datadog:disconnect'),
+    getSnapshot: () => ipcRenderer.invoke('datadog:get-snapshot'),
+    onSnapshot: (callback: (snapshot: any) => void) => {
+      ipcRenderer.on('datadog:snapshot', (_event, snapshot) => callback(snapshot));
+    },
+    onError: (callback: (error: string) => void) => {
+      ipcRenderer.on('datadog:error', (_event, error) => callback(error));
+    },
+  },
+
+  // Chrome CDP
+  chrome: {
+    setPort: (port: string) => ipcRenderer.invoke('chrome:set-port', port),
+    disconnect: () => ipcRenderer.invoke('chrome:disconnect'),
+    listTabs: (port: string) => ipcRenderer.invoke('chrome:list-tabs', port),
+    switchTab: (targetId: string) => ipcRenderer.invoke('chrome:switch-tab', targetId),
+    getSnapshot: () => ipcRenderer.invoke('chrome:get-snapshot'),
+    onSnapshot: (callback: (snapshot: any) => void) => {
+      ipcRenderer.on('chrome:snapshot', (_event, snapshot) => callback(snapshot));
+    },
+    onError: (callback: (error: string) => void) => {
+      ipcRenderer.on('chrome:error', (_event, error) => callback(error));
+    },
+  },
+
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
 
@@ -81,6 +164,13 @@ contextBridge.exposeInMainWorld('vitals', {
   // Preferences
   getPollingInterval: () => ipcRenderer.invoke('preferences:get-polling-interval'),
   setPollingInterval: (sec: number) => ipcRenderer.invoke('preferences:set-polling-interval', sec),
+  getRestingMode: () => ipcRenderer.invoke('preferences:get-resting-mode') as Promise<string>,
+  setRestingMode: (mode: string) => ipcRenderer.invoke('preferences:set-resting-mode', mode),
+  getLaunchAtLogin: () => ipcRenderer.invoke('preferences:get-launch-at-login') as Promise<boolean>,
+  setLaunchAtLogin: (enabled: boolean) => ipcRenderer.invoke('preferences:set-launch-at-login', enabled),
+  getSmartSilence: () => ipcRenderer.invoke('preferences:get-smart-silence') as Promise<{ enabled: boolean; startHour: number; endHour: number; weekends: boolean }>,
+  setSmartSilence: (config: { enabled: boolean; startHour: number; endHour: number; weekends: boolean }) => ipcRenderer.invoke('preferences:set-smart-silence', config),
+  isSilenced: () => ipcRenderer.invoke('preferences:is-silenced') as Promise<boolean>,
 
   // Connectors status
   getConnectorStatus: () => ipcRenderer.invoke('connectors:status'),

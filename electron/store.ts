@@ -13,6 +13,10 @@ interface StoreSchema {
     sentry?: string;
     posthog?: string;
     segment?: string;
+    openai?: string;
+    anthropic?: string;
+    datadog?: string;
+    chrome?: string;
   };
   github?: {
     clientId?: string;
@@ -23,8 +27,12 @@ interface StoreSchema {
   preferences: {
     hotkey: string;
     smartSilence: boolean;
+    silenceStartHour: number;
+    silenceEndHour: number;
+    silenceWeekends: boolean;
     launchAtLogin: boolean;
     pollingIntervalSec: number;
+    restingMode: 'carousel' | 'vitals' | 'fixed';
   };
 }
 
@@ -40,9 +48,13 @@ async function getStore(): Promise<any> {
       watchedVercelProjects: [],
       preferences: {
         hotkey: 'CommandOrControl+Shift+N',
-        smartSilence: true,
+        smartSilence: false,
+        silenceStartHour: 19,
+        silenceEndHour: 8,
+        silenceWeekends: true,
         launchAtLogin: false,
         pollingIntervalSec: 30,
+        restingMode: 'carousel',
       },
     },
   });
@@ -83,6 +95,10 @@ export async function getAllTokenStatus(): Promise<Record<string, boolean>> {
     sentry: !!tokens?.sentry,
     posthog: !!tokens?.posthog,
     segment: !!tokens?.segment,
+    openai: !!tokens?.openai,
+    anthropic: !!tokens?.anthropic,
+    datadog: !!tokens?.datadog,
+    chrome: !!tokens?.chrome,
   };
 }
 
@@ -114,4 +130,67 @@ export async function getPollingInterval(): Promise<number> {
 export async function setPollingInterval(sec: number): Promise<void> {
   const store = await getStore();
   store.set('preferences.pollingIntervalSec', sec);
+}
+
+export async function getLaunchAtLogin(): Promise<boolean> {
+  const store = await getStore();
+  return (store.get('preferences.launchAtLogin') as boolean) ?? false;
+}
+
+export async function setLaunchAtLogin(enabled: boolean): Promise<void> {
+  const store = await getStore();
+  store.set('preferences.launchAtLogin', enabled);
+}
+
+export interface SmartSilenceConfig {
+  enabled: boolean;
+  startHour: number;
+  endHour: number;
+  weekends: boolean;
+}
+
+export async function getSmartSilence(): Promise<SmartSilenceConfig> {
+  const store = await getStore();
+  return {
+    enabled: (store.get('preferences.smartSilence') as boolean) ?? false,
+    startHour: (store.get('preferences.silenceStartHour') as number) ?? 19,
+    endHour: (store.get('preferences.silenceEndHour') as number) ?? 8,
+    weekends: (store.get('preferences.silenceWeekends') as boolean) ?? true,
+  };
+}
+
+export async function setSmartSilence(config: SmartSilenceConfig): Promise<void> {
+  const store = await getStore();
+  store.set('preferences.smartSilence', config.enabled);
+  store.set('preferences.silenceStartHour', config.startHour);
+  store.set('preferences.silenceEndHour', config.endHour);
+  store.set('preferences.silenceWeekends', config.weekends);
+}
+
+export function isInSilenceWindow(config: SmartSilenceConfig): boolean {
+  if (!config.enabled) return false;
+  const now = new Date();
+  const day = now.getDay();
+  const hour = now.getHours();
+
+  // Weekend check (0 = Sunday, 6 = Saturday)
+  if (config.weekends && (day === 0 || day === 6)) return true;
+
+  // Hour check — handles ranges that cross midnight (e.g., 19→8)
+  if (config.startHour > config.endHour) {
+    // e.g., 19:00 → 08:00: silent if hour >= 19 OR hour < 8
+    return hour >= config.startHour || hour < config.endHour;
+  }
+  // e.g., 22:00 → 22:00 (same = disabled) or 8:00 → 19:00
+  return hour >= config.startHour && hour < config.endHour;
+}
+
+export async function getRestingMode(): Promise<string> {
+  const store = await getStore();
+  return (store.get('preferences.restingMode') as string) || 'carousel';
+}
+
+export async function setRestingMode(mode: string): Promise<void> {
+  const store = await getStore();
+  store.set('preferences.restingMode', mode);
 }

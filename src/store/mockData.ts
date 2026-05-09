@@ -9,6 +9,12 @@ export const emptyHoverData: HoverData = {
   eventsPerMin: { value: '—', trend: 'stable' },
   vercel: null,
   sentry: null,
+  openai: null,
+  anthropic: null,
+  datadog: null,
+  posthog: null,
+  segment: null,
+  chrome: null,
   github: {
     prs: [],
     actions: [],
@@ -21,6 +27,8 @@ export const mockConnectors: ConnectorConfig[] = [
   { id: 'github', name: 'github', connected: false, icon: 'G' },
   { id: 'vercel', name: 'vercel', connected: false, icon: 'V' },
   { id: 'sentry', name: 'sentry', connected: false, icon: 'S' },
-  { id: 'posthog', name: 'posthog', connected: false, icon: 'P' },
-  { id: 'segment', name: 'segment', connected: false, icon: 'Se' },
+  { id: 'openai', name: 'openai', connected: false, icon: 'OA' },
+  { id: 'anthropic', name: 'anthropic', connected: false, icon: 'An' },
+  { id: 'datadog', name: 'datadog', connected: false, icon: 'DD' },
+  { id: 'chrome', name: 'chrome', connected: false, icon: 'Ch' },
 ];

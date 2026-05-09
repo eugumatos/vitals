@@ -1,20 +1,208 @@
+import { useState } from 'react';
 import { useVitalsStore } from '../../store/useVitalsStore';
 import { colors, fontSize, spacing, fonts } from '../../lib/design-tokens';
 import { ShieldCheckIcon, AlertTriangleIcon, CIFailIcon, CommitIcon } from '../ui/Icons';
 import { SkeletonList, Skeleton } from '../ui/Skeleton';
+import { formatTimeAgo } from '../../lib/utils';
 
-function formatTimeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+type NetworkFilter = 'all' | 'xhr' | 'doc' | 'css' | 'js' | 'img' | 'other' | 'failed';
+
+function shellEscape(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+function buildCurl(req: { method: string; url: string; requestHeaders?: Record<string, string>; postData?: string }): string {
+  const parts: string[] = ['curl', shellEscape(req.url)];
+  if (req.method !== 'GET') parts.push('-X', req.method);
+  const headers = req.requestHeaders || {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.startsWith(':')) continue;
+    parts.push('-H', shellEscape(`${k}: ${v}`));
+  }
+  if (req.postData) {
+    parts.push('--data-raw', shellEscape(req.postData));
+  }
+  return parts.join(' \\\n  ');
+}
+
+function CopyCurlButton({ req }: { req: { method: string; url: string; requestHeaders?: Record<string, string>; postData?: string } }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(buildCurl(req));
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      style={{
+        background: colors.subtle,
+        border: 'none',
+        borderRadius: 6,
+        color: copied ? colors.healthy : colors.textTertiary,
+        fontSize: 10,
+        fontFamily: fonts.mono,
+        padding: '1px 4px',
+        cursor: 'pointer',
+        flexShrink: 0,
+        transition: 'color 0.15s',
+      }}
+      title="copy as cURL"
+    >
+      {copied ? '✓' : 'curl'}
+    </button>
+  );
+}
+
+function ChromeNetworkView({ data }: { data: any }) {
+  const [filter, setFilter] = useState<NetworkFilter>('all');
+  const networkReqs: Array<{ timestamp: number; method: string; url: string; status: number | null; duration: number | null; type: string; failed: boolean; error?: string; size: number | null; requestHeaders?: Record<string, string>; postData?: string }> = data?.network || [];
+  const stats = data?.stats || {};
+
+  const typeMap: Record<string, NetworkFilter> = {
+    XHR: 'xhr', Fetch: 'xhr',
+    Document: 'doc',
+    Stylesheet: 'css',
+    Script: 'js',
+    Image: 'img', Media: 'img', Font: 'img',
+  };
+
+  const filtered = filter === 'all' ? networkReqs
+    : filter === 'failed' ? networkReqs.filter((r) => r.failed || (r.status && r.status >= 400))
+    : networkReqs.filter((r) => (typeMap[r.type] || 'other') === filter);
+
+  const tabTitle = data?.tabTitle || '';
+  const tabUrl = data?.tabUrl || '';
+  const tabHost = (() => { try { return new URL(tabUrl).host; } catch { return tabUrl; } })();
+
+  return (
+    <div style={{ padding: `${spacing.panelPaddingY}px ${spacing.panelPaddingX}px`, display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+      {/* Tab info */}
+      {tabTitle && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: spacing.lineGap, overflow: 'hidden' }}>
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {tabTitle}
+          </span>
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1 }}>
+            {tabHost}
+          </span>
+        </div>
+      )}
+      {/* Filter bar */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lineGap }}>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {(['all', 'xhr', 'doc', 'js', 'css', 'img', 'failed'] as NetworkFilter[]).map((f) => {
+            const count = f === 'all' ? networkReqs.length
+              : f === 'failed' ? networkReqs.filter((r) => r.failed || (r.status && r.status >= 400)).length
+              : networkReqs.filter((r) => (typeMap[r.type] || 'other') === f).length;
+            const active = filter === f;
+            return (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                style={{
+                  background: active ? 'rgba(255,255,255,0.12)' : colors.subtle,
+                  border: 'none',
+                  borderRadius: 6,
+                  color: active
+                    ? (f === 'failed' ? colors.incident : colors.action)
+                    : colors.textTertiary,
+                  fontSize: fontSize.labelSecondary,
+                  fontFamily: fonts.mono,
+                  padding: '2px 6px',
+                  cursor: 'pointer',
+                }}
+              >
+                {f}{count > 0 ? ` ${count}` : ''}
+              </button>
+            );
+          })}
+        </div>
+        {stats.avgResponseTime != null && (
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>
+            avg {stats.avgResponseTime}ms
+          </span>
+        )}
+      </div>
+
+      {/* Network entries */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {filtered.length === 0 ? (
+          <div style={{ fontSize: fontSize.body, color: colors.textTertiary, textAlign: 'center', paddingTop: 20 }}>
+            {networkReqs.length === 0 ? 'no network activity yet' : `no ${filter} requests`}
+          </div>
+        ) : (
+          filtered.slice(-25).reverse().map((req, i) => {
+            const urlShort = (() => {
+              try {
+                const u = new URL(req.url);
+                return u.pathname + (u.search ? '?' + u.search.slice(1, 30) : '');
+              } catch {
+                return req.url.slice(0, 50);
+              }
+            })();
+            const statusColor = req.failed ? colors.incident
+              : req.status && req.status >= 400 ? colors.incident
+              : req.status && req.status >= 300 ? colors.anomaly
+              : colors.healthy;
+
+            return (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  gap: 6,
+                  alignItems: 'center',
+                  paddingBottom: 3,
+                  marginBottom: 3,
+                  borderBottom: `0.5px solid ${colors.divider}`,
+                }}
+              >
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono, flexShrink: 0, width: 28 }}>
+                  {req.method}
+                </span>
+                <span style={{ fontSize: fontSize.labelSecondary, color: statusColor, fontFamily: fonts.mono, flexShrink: 0, width: 24 }}>
+                  {req.failed ? 'ERR' : req.status || '...'}
+                </span>
+                <span style={{
+                  fontSize: fontSize.labelSecondary,
+                  color: colors.textPrimary,
+                  fontFamily: fonts.mono,
+                  flex: 1,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}>
+                  {urlShort}
+                </span>
+                {req.duration != null && (
+                  <span style={{ fontSize: fontSize.labelSecondary, color: req.duration > 1000 ? colors.anomaly : colors.textTertiary, fontFamily: fonts.mono, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                    {req.duration}ms
+                  </span>
+                )}
+                <CopyCurlButton req={req} />
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatTimeAgoWithSuffix(dateStr: string): string {
+  const short = formatTimeAgo(dateStr);
+  return short === 'now' ? 'now' : `${short} ago`;
 }
 
 export function Anomaly() {
   const { hoverData, activeIntegration } = useVitalsStore();
+
+  // Chrome network view
+  if (activeIntegration === 'chrome') {
+    const chromeData = hoverData.chrome?.data;
+    return <ChromeNetworkView data={chromeData || {}} />;
+  }
 
   // GitHub anomalies
   const { github, vercel } = hoverData;
@@ -28,16 +216,20 @@ export function Anomaly() {
   });
   const vercelWarnings = [...failedDeploys, ...slowBuilds];
 
+  // Sentry anomalies
+  const sentry = hoverData.sentry;
+  const sentryAnomalies = (sentry?.issues || []).filter((issue) => issue.isNew || issue.isUnhandled);
+  const hasSentryAnomalies = sentryAnomalies.length > 0;
+
   const hasGitHubAnomalies = failedActions.length > 0;
   const hasVercelAnomalies = vercelWarnings.length > 0;
   const lastPolledAt = useVitalsStore((s) => s.lastPolledAt);
   const connectors = useVitalsStore((s) => s.connectors);
-  const isConnected = activeIntegration === 'vercel'
-    ? connectors.find((c) => c.id === 'vercel')?.connected
-    : connectors.find((c) => c.id === 'github')?.connected;
+  const isConnected = connectors.find((c) => c.id === activeIntegration)?.connected;
 
   const hasAnomalies = activeIntegration === 'vercel' ? hasVercelAnomalies
     : activeIntegration === 'github' ? hasGitHubAnomalies
+    : activeIntegration === 'sentry' ? hasSentryAnomalies
     : false;
 
   // Loading skeleton
@@ -104,12 +296,12 @@ export function Anomaly() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
                     <button
                       onClick={() => { if (action.repoFullName && action.fullSha.length > 7) window.vitals.openExternal(`https://github.com/${action.repoFullName}/commit/${action.fullSha}`); }}
-                      style={{ background: colors.subtle, border: 'none', borderRadius: 3, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono, cursor: 'pointer' }}
+                      style={{ background: colors.subtle, border: 'none', borderRadius: 6, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono, cursor: 'pointer' }}
                     >{action.sha}</button>
                     <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>{action.branch}</span>
                   </div>
                 </div>
-                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgo(action.updatedAt)}</span>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgoWithSuffix(action.updatedAt)}</span>
               </div>
             ))}
           </div>
@@ -122,13 +314,58 @@ export function Anomaly() {
                   <CommitIcon />
                   <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>{c.repo}</span>
                   <button onClick={() => { if (c.repoFullName && c.fullSha.length > 7) window.vitals.openExternal(`https://github.com/${c.repoFullName}/commit/${c.fullSha}`); }}
-                    style={{ background: colors.subtle, border: 'none', borderRadius: 3, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono, cursor: 'pointer' }}>{c.sha}</button>
+                    style={{ background: colors.subtle, border: 'none', borderRadius: 6, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono, cursor: 'pointer' }}>{c.sha}</button>
                   <span style={{ fontSize: fontSize.body, color: colors.textPrimary, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.message}</span>
-                  <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgo(c.date)}</span>
+                  <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgoWithSuffix(c.date)}</span>
                 </div>
               ))}
             </div>
           )}
+        </>
+      )}
+
+      {/* Sentry anomalies — new/unhandled issues */}
+      {activeIntegration === 'sentry' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: spacing.sectionGap }}>
+            <AlertTriangleIcon size={16} />
+            <span style={{ fontSize: fontSize.title, color: colors.textPrimary }}>
+              {sentryAnomalies.length} new {sentryAnomalies.length === 1 ? 'issue' : 'issues'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.lineGap }}>
+            {sentryAnomalies.map((issue, i, arr) => (
+              <div
+                key={issue.id}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 10,
+                  paddingBottom: spacing.lineGap + 2,
+                  borderBottom: i < arr.length - 1 ? `0.5px solid ${colors.divider}` : 'none',
+                }}
+              >
+                <div style={{ marginTop: 2 }}><AlertTriangleIcon size={13} color={issue.isUnhandled ? colors.incident : colors.anomaly} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: fontSize.body, color: issue.isUnhandled ? colors.incident : colors.anomaly, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {issue.title}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                    <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>{issue.project}</span>
+                    <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>{issue.count}x</span>
+                    {issue.permalink && (
+                      <button
+                        onClick={() => window.vitals.openExternal(issue.permalink)}
+                        style={{ background: colors.subtle, border: 'none', borderRadius: 6, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.action, cursor: 'pointer', marginLeft: 'auto' }}
+                      >
+                        view
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgoWithSuffix(issue.lastSeen)}</span>
+              </div>
+            ))}
+          </div>
         </>
       )}
 
@@ -166,7 +403,7 @@ export function Anomaly() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
                       {deploy.sha && (
-                        <span style={{ background: colors.subtle, borderRadius: 3, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono }}>{deploy.sha}</span>
+                        <span style={{ background: colors.subtle, borderRadius: 6, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono }}>{deploy.sha}</span>
                       )}
                       {deploy.branch && (
                         <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>{deploy.branch}</span>
@@ -176,13 +413,13 @@ export function Anomaly() {
                           const url = deploy.inspectorUrl || deploy.url;
                           if (url) window.vitals.openExternal(url.startsWith('http') ? url : `https://${url}`);
                         }}
-                        style={{ background: colors.subtle, border: 'none', borderRadius: 3, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.action, cursor: 'pointer', marginLeft: 'auto' }}
+                        style={{ background: colors.subtle, border: 'none', borderRadius: 6, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.action, cursor: 'pointer', marginLeft: 'auto' }}
                       >
                         view
                       </button>
                     </div>
                   </div>
-                  <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgo(deploy.createdAt)}</span>
+                  <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgoWithSuffix(deploy.createdAt)}</span>
                 </div>
               );
             })}

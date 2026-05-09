@@ -1,22 +1,17 @@
 import { useState } from 'react';
 import { useVitalsStore } from '../../store/useVitalsStore';
 import { colors, fontSize, spacing, fonts } from '../../lib/design-tokens';
-import { motion } from 'framer-motion';
 import { ShieldCheckIcon, FlameIcon, XCircleIcon } from '../ui/Icons';
 import { SkeletonList, Skeleton } from '../ui/Skeleton';
+import { formatTimeAgo } from '../../lib/utils';
 import type { VercelLogLine, VercelProjectLogs } from '../../store/types';
 
 type LogFilter = 'all' | 'error' | 'warning';
 type LogSource = 'runtime' | 'build';
 
-function formatTimeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+function formatTimeAgoWithSuffix(dateStr: string): string {
+  const short = formatTimeAgo(dateStr);
+  return short === 'now' ? 'now' : `${short} ago`;
 }
 
 export function Incident() {
@@ -71,9 +66,7 @@ export function Incident() {
 
   const lastPolledAt = useVitalsStore((s) => s.lastPolledAt);
   const connectors = useVitalsStore((s) => s.connectors);
-  const isConnected = activeIntegration === 'vercel'
-    ? connectors.find((c) => c.id === 'vercel')?.connected
-    : connectors.find((c) => c.id === 'github')?.connected;
+  const isConnected = connectors.find((c) => c.id === activeIntegration)?.connected;
 
   const hasContent = activeIntegration === 'vercel' ? (hasVercelLogs || hasVercelIncident)
     : activeIntegration === 'github' ? hasGitHubIncident
@@ -128,12 +121,10 @@ export function Incident() {
       {activeIntegration === 'github' && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: spacing.sectionGap }}>
-            <motion.div
-              animate={{ opacity: [1, 0.4, 1] }}
-              transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
-            >
+            <div style={{ animation: 'vitals-pulse 2s ease-in-out infinite' }}>
+              <style>{`@keyframes vitals-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
               <FlameIcon size={18} />
-            </motion.div>
+            </div>
             <span style={{ fontSize: fontSize.title, color: colors.incident }}>
               CI incident — {failedActions.length} failures
             </span>
@@ -158,18 +149,18 @@ export function Incident() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
                     <button onClick={() => { if (action.repoFullName && action.fullSha.length > 7) window.vitals.openExternal(`https://github.com/${action.repoFullName}/actions`); }}
-                      style={{ background: colors.subtle, border: 'none', borderRadius: 3, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono, cursor: 'pointer' }}>{action.sha}</button>
+                      style={{ background: colors.subtle, border: 'none', borderRadius: 10, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono, cursor: 'pointer' }}>{action.sha}</button>
                     <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>{action.branch}</span>
                   </div>
                 </div>
-                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgo(action.updatedAt)}</span>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgoWithSuffix(action.updatedAt)}</span>
               </div>
             ))}
           </div>
           {criticalRepos.length > 0 && (
             <div style={{ marginTop: 'auto', paddingTop: spacing.sectionGap, display: 'flex', justifyContent: 'flex-end' }}>
               <button onClick={() => { const repo = failedActions[0]; if (repo?.repoFullName) window.vitals.openExternal(`https://github.com/${repo.repoFullName}/actions`); }}
-                style={{ background: colors.incident, border: 'none', borderRadius: 6, color: '#000', fontSize: fontSize.labelSecondary, fontWeight: 600, padding: '5px 14px', cursor: 'pointer' }}>
+                style={{ background: colors.incident, border: 'none', borderRadius: 10, color: '#000', fontSize: fontSize.labelSecondary, fontWeight: 600, padding: '5px 14px', cursor: 'pointer' }}>
                 open actions
               </button>
             </div>
@@ -186,7 +177,7 @@ export function Incident() {
               onClick={() => setSelectedProject('all')}
               style={{
                 background: selectedProject === 'all' ? 'rgba(255,255,255,0.12)' : colors.subtle,
-                border: 'none', borderRadius: 3,
+                border: 'none', borderRadius: 10,
                 color: selectedProject === 'all' ? colors.action : colors.textTertiary,
                 fontSize: fontSize.labelSecondary, fontFamily: fonts.mono,
                 padding: '2px 6px', cursor: 'pointer',
@@ -200,7 +191,7 @@ export function Incident() {
                 onClick={() => setSelectedProject(name)}
                 style={{
                   background: selectedProject === name ? 'rgba(255,255,255,0.12)' : colors.subtle,
-                  border: 'none', borderRadius: 3,
+                  border: 'none', borderRadius: 10,
                   color: selectedProject === name ? colors.action : colors.textTertiary,
                   fontSize: fontSize.labelSecondary, fontFamily: fonts.mono,
                   padding: '2px 6px', cursor: 'pointer',
@@ -229,7 +220,7 @@ export function Incident() {
                   style={{
                     background: logFilter === f ? 'rgba(255,255,255,0.12)' : colors.subtle,
                     border: 'none',
-                    borderRadius: 3,
+                    borderRadius: 10,
                     color: logFilter === f
                       ? (f === 'error' ? colors.incident : f === 'warning' ? colors.anomaly : colors.action)
                       : colors.textTertiary,
@@ -248,7 +239,7 @@ export function Incident() {
           <div
             style={{
               background: colors.subtle,
-              borderRadius: 6,
+              borderRadius: 10,
               border: `0.5px solid ${colors.divider}`,
               padding: '8px 10px',
               flex: 1,

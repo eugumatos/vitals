@@ -30,29 +30,30 @@ const contentFade = {
   initial: { opacity: 0, y: 6, filter: 'blur(2px)' },
   animate: { opacity: 1, y: 0, filter: 'blur(0px)' },
   exit: { opacity: 0, y: -4, filter: 'blur(2px)' },
-  transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] },
+  transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] as [number, number, number, number] },
 };
 
-const HEADER_HEIGHT = 28;
+const HEADER_HEIGHT = 32;
 const TRANSITION = 'width 380ms cubic-bezier(0.32, 0.72, 0.3, 1), height 380ms cubic-bezier(0.32, 0.72, 0.3, 1), border-radius 200ms ease';
 
 export function Notch({ onMouseEnter, onMouseLeave }: NotchProps) {
   const state = useVitalsStore((s) => s.state);
   const setHover = useVitalsStore((s) => s.setHover);
   const setResting = useVitalsStore((s) => s.setResting);
+  const isSilenced = useVitalsStore((s) => s.isSilenced);
   const { notchWidth, menuBarHeight } = useGeometryStore();
 
   const isResting = state === 'resting';
   const showHeader = !isResting;
   const dims = stateDimensions[state];
 
-  const restingWidth = notchWidth + 200;
+  const restingWidth = isSilenced ? notchWidth + 130 : notchWidth + 200;
   const shellWidth = isResting ? restingWidth : dims.width;
   const shellHeight = isResting
     ? menuBarHeight
     : menuBarHeight + HEADER_HEIGHT + dims.height;
 
-  const borderRadius = isResting ? '0 0 14px 14px' : '0 0 20px 20px';
+  const borderRadius = isResting ? '0 0 18px 18px' : '0 0 24px 24px';
 
   const StateComponent = stateComponents[state];
 

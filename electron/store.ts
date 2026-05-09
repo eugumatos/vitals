@@ -24,6 +24,7 @@ interface StoreSchema {
   };
   watchedRepos: WatchedRepo[];
   watchedVercelProjects: string[]; // project names to monitor
+  watchedSentryProjects: string[]; // sentry project slugs to monitor
   preferences: {
     hotkey: string;
     smartSilence: boolean;
@@ -46,6 +47,7 @@ async function getStore(): Promise<any> {
       tokens: {},
       watchedRepos: [],
       watchedVercelProjects: [],
+      watchedSentryProjects: [],
       preferences: {
         hotkey: 'CommandOrControl+Shift+N',
         smartSilence: false,
@@ -120,6 +122,16 @@ export async function getWatchedVercelProjects(): Promise<string[]> {
 export async function setWatchedVercelProjects(projects: string[]): Promise<void> {
   const store = await getStore();
   store.set('watchedVercelProjects', projects);
+}
+
+export async function getWatchedSentryProjects(): Promise<string[]> {
+  const store = await getStore();
+  return (store.get('watchedSentryProjects') as string[]) || [];
+}
+
+export async function setWatchedSentryProjects(projects: string[]): Promise<void> {
+  const store = await getStore();
+  store.set('watchedSentryProjects', projects);
 }
 
 export async function getPollingInterval(): Promise<number> {

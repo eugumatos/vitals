@@ -100,7 +100,6 @@ export function Onboarding() {
                   style={{
                     fontSize: fontSize.bodyLarge,
                     color: colors.textPrimary,
-                    textTransform: 'lowercase',
                   }}
                 >
                   {connector.name}

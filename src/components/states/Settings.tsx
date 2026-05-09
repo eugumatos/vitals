@@ -123,7 +123,7 @@ function HourStepper({ value, onChange }: { value: number; onChange: (v: number)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
       <button onClick={dec} style={arrowStyle}>‹</button>
-      <span style={{ fontSize: 12, fontFamily: fonts.mono, fontVariantNumeric: 'tabular-nums', color: colors.healthy, minWidth: 36, textAlign: 'center' }}>{label}</span>
+      <span style={{ fontSize: 12, fontFamily: fonts.mono, fontVariantNumeric: 'tabular-nums', color: colors.textPrimary, minWidth: 36, textAlign: 'center' }}>{label}</span>
       <button onClick={inc} style={arrowStyle}>›</button>
     </div>
   );
@@ -190,6 +190,8 @@ export function Settings() {
   const [justConnected, setJustConnected] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const hasAnyConnected = connectors.some((c) => c.connected);
+  const serviceErrors = useVitalsStore((s) => s.serviceErrors);
+  const hasErrors = Object.values(serviceErrors).some(Boolean);
   const [showDisconnected, setShowDisconnected] = useState(!hasAnyConnected);
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
   const [showWatchedRepos, setShowWatchedRepos] = useState(false);
@@ -218,8 +220,16 @@ export function Settings() {
   const [loadingVercelProjects, setLoadingVercelProjects] = useState(false);
   const [addingVercelProject, setAddingVercelProject] = useState(false);
 
+  // Sentry watched projects
+  const [watchedSentryProjects, setWatchedSentryProjectsLocal] = useState<string[]>([]);
+  const [availableSentryProjects, setAvailableSentryProjects] = useState<Array<{ slug: string; name: string }>>([]);
+  const [loadingSentryProjects, setLoadingSentryProjects] = useState(false);
+  const [addingSentryProject, setAddingSentryProject] = useState(false);
+  const [showWatchedSentryProjects, setShowWatchedSentryProjects] = useState(false);
+
   const githubConnected = connectors.find((c) => c.id === 'github')?.connected;
   const vercelConnected = connectors.find((c) => c.id === 'vercel')?.connected;
+  const sentryConnected = connectors.find((c) => c.id === 'sentry')?.connected;
 
   useEffect(() => {
     if (githubConnected) {
@@ -227,6 +237,9 @@ export function Settings() {
     }
     if (vercelConnected) {
       window.vitals.vercel?.getWatchedProjects().then(setWatchedVercelProjectsLocal);
+    }
+    if (sentryConnected) {
+      window.vitals.sentry?.getWatchedProjects().then(setWatchedSentryProjectsLocal);
     }
     window.vitals.getPollingInterval().then((sec) => {
       setPollingIntervalLocal(sec);
@@ -239,7 +252,7 @@ export function Settings() {
     });
     window.vitals.getLaunchAtLogin().then(setLaunchAtLoginLocal);
     window.vitals.getSmartSilence().then(setSmartSilenceLocal);
-  }, [githubConnected, vercelConnected]);
+  }, [githubConnected, vercelConnected, sentryConnected]);
 
   const handlePollingChange = useCallback(async (sec: number) => {
     setPollingIntervalLocal(sec);
@@ -445,6 +458,34 @@ export function Settings() {
     window.vitals.forceRefresh();
   };
 
+  // Sentry project management
+  const loadSentryProjects = async () => {
+    setLoadingSentryProjects(true);
+    try {
+      const result = await window.vitals.sentry.listProjects();
+      if (result?.success && result.data) setAvailableSentryProjects(result.data);
+    } catch (err) {
+      console.error('Failed to load Sentry projects:', err);
+    }
+    setLoadingSentryProjects(false);
+    setAddingSentryProject(true);
+  };
+
+  const addSentryProject = async (slug: string) => {
+    const updated = [...watchedSentryProjects, slug];
+    setWatchedSentryProjectsLocal(updated);
+    await window.vitals.sentry.setWatchedProjects(updated);
+    setAddingSentryProject(false);
+    window.vitals.forceRefresh();
+  };
+
+  const removeSentryProject = async (slug: string) => {
+    const updated = watchedSentryProjects.filter((p) => p !== slug);
+    setWatchedSentryProjectsLocal(updated);
+    await window.vitals.sentry.setWatchedProjects(updated);
+    window.vitals.forceRefresh();
+  };
+
   return (
     <div
       style={{
@@ -514,7 +555,7 @@ export function Settings() {
                 <span style={{ color: colors.textPrimary, display: 'flex', alignItems: 'center' }}>
                   {(() => { const Icon = integrationIcons[connector.id]; return Icon ? <Icon size={14} /> : null; })()}
                 </span>
-                <span style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, textTransform: 'lowercase' }}>{connector.name}</span>
+                <span style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary,  }}>{connector.name}</span>
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 {justConnected === connector.id && (
@@ -545,7 +586,7 @@ export function Settings() {
                   <span style={{ color: colors.textTertiary, display: 'flex', alignItems: 'center' }}>
                     {(() => { const Icon = integrationIcons[connector.id]; return Icon ? <Icon size={14} /> : null; })()}
                   </span>
-                  <span style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, textTransform: 'lowercase' }}>{connector.name}</span>
+                  <span style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary,  }}>{connector.name}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   {!connector.connected && connector.id === 'github' && deviceFlow.step === 'idle' && (
@@ -852,12 +893,80 @@ export function Settings() {
           </div>
         )}
 
+        {/* watched sentry projects accordion */}
+        {sentryConnected && (
+          <div style={{ borderTop: `0.5px solid ${colors.divider}`, paddingTop: spacing.sectionGap, marginBottom: spacing.sectionGap }}>
+            <div
+              onClick={() => setShowWatchedSentryProjects(!showWatchedSentryProjects)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                marginBottom: spacing.lineGap + 4, padding: '4px 0',
+              }}
+            >
+              <span style={{
+                fontSize: 11, color: colors.textSecondary,
+                transition: 'transform 0.3s cubic-bezier(0.32, 0.72, 0.3, 1)',
+                transform: showWatchedSentryProjects ? 'rotate(90deg)' : 'rotate(0deg)',
+                display: 'inline-block',
+              }}>▶</span>
+              <span style={{ fontSize: fontSize.body, color: colors.textPrimary, fontWeight: 500, letterSpacing: '0.01em' }}>
+                Watched projects (Sentry)
+              </span>
+              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginLeft: 2 }}>
+                {watchedSentryProjects.length || 'all'}
+              </span>
+            </div>
+
+            {!showWatchedSentryProjects && watchedSentryProjects.length > 0 && (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {watchedSentryProjects.map((slug) => (
+                  <span key={slug} style={{
+                    background: 'rgba(255,255,255,0.08)', borderRadius: 6,
+                    color: colors.textSecondary, fontSize: fontSize.labelSecondary,
+                    fontFamily: fonts.mono, padding: '2px 7px',
+                  }}>{slug}</span>
+                ))}
+              </div>
+            )}
+
+            <AccordionPanel open={showWatchedSentryProjects}>
+              {watchedSentryProjects.length === 0 && (
+                <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginBottom: spacing.lineGap }}>
+                  monitoring all projects
+                </div>
+              )}
+              {watchedSentryProjects.map((slug) => (
+                <div key={slug} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: spacing.lineGap + 2, marginBottom: spacing.lineGap + 2, borderBottom: `0.5px solid ${colors.divider}` }}>
+                  <span style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontFamily: fonts.mono }}>{slug}</span>
+                  <button onClick={() => removeSentryProject(slug)} style={btnStyle('ghost')}>remove</button>
+                </div>
+              ))}
+              {!addingSentryProject ? (
+                <button onClick={loadSentryProjects} disabled={loadingSentryProjects} style={{ ...btnStyle('subtle'), opacity: loadingSentryProjects ? 0.5 : 1 }}>
+                  {loadingSentryProjects ? 'loading...' : '+ add project'}
+                </button>
+              ) : (
+                <div style={{ maxHeight: 100, overflowY: 'auto' }}>
+                  {availableSentryProjects.filter((p) => !watchedSentryProjects.includes(p.slug)).map((project) => (
+                    <div key={project.slug} onClick={() => addSentryProject(project.slug)}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 0', cursor: 'pointer', borderBottom: `0.5px solid ${colors.divider}` }}>
+                      <span style={{ fontSize: fontSize.body, color: colors.textPrimary, fontFamily: fonts.mono }}>{project.slug}</span>
+                      <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>{project.name}</span>
+                    </div>
+                  ))}
+                  <button onClick={() => setAddingSentryProject(false)} style={{ ...btnStyle('ghost'), marginTop: 4 }}>cancel</button>
+                </div>
+              )}
+            </AccordionPanel>
+          </div>
+        )}
+
         {/* preferences */}
         <div
           style={{
             marginTop: spacing.lineGap,
-            background: 'rgba(52, 211, 153, 0.06)',
-            border: '0.5px solid rgba(52, 211, 153, 0.12)',
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '0.5px solid rgba(255, 255, 255, 0.08)',
             borderRadius: 10,
             padding: `${spacing.sectionGap}px ${spacing.panelPaddingX - 6}px`,
           }}
@@ -865,18 +974,12 @@ export function Settings() {
           <div
             style={{
               fontSize: fontSize.body,
-              color: colors.healthy,
+              color: colors.textSecondary,
               fontWeight: 500,
               letterSpacing: '0.01em',
               marginBottom: spacing.lineGap + 4,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
             }}
           >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style={{ display: 'block', flexShrink: 0 }}>
-              <path d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1Zm-.5 4v4.5h1V5h-1Zm0 6v1h1v-1h-1Z" fill={colors.healthy} fillRule="evenodd" />
-            </svg>
             Preferences
           </div>
           <PrefRow label="Hotkey" value="⌘⇧N" accent />
@@ -885,7 +988,7 @@ export function Settings() {
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: `${spacing.lineGap + 2}px 0`,
-              borderBottom: `0.5px solid rgba(52, 211, 153, 0.10)`,
+              borderBottom: `0.5px solid rgba(255, 255, 255, 0.06)`,
             }}
           >
             <span style={{ fontSize: fontSize.body, color: colors.textPrimary }}>Polling interval</span>
@@ -895,10 +998,10 @@ export function Settings() {
                   key={opt.value}
                   onClick={() => handlePollingChange(opt.value)}
                   style={{
-                    background: pollingInterval === opt.value ? 'rgba(52, 211, 153, 0.18)' : 'rgba(255,255,255,0.04)',
+                    background: pollingInterval === opt.value ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255,255,255,0.04)',
                     border: 'none',
                     borderRadius: 6,
-                    color: pollingInterval === opt.value ? colors.healthy : colors.textTertiary,
+                    color: pollingInterval === opt.value ? colors.textPrimary : colors.textTertiary,
                     fontSize: fontSize.labelSecondary,
                     padding: '2px 6px',
                     cursor: 'pointer',
@@ -915,7 +1018,7 @@ export function Settings() {
           <div
             style={{
               padding: `${spacing.lineGap + 2}px 0`,
-              borderBottom: `0.5px solid rgba(52, 211, 153, 0.10)`,
+              borderBottom: `0.5px solid rgba(255, 255, 255, 0.06)`,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -928,8 +1031,8 @@ export function Settings() {
                   onClick={() => handleRestingModeChange(opt.value)}
                   style={{
                     flex: 1,
-                    background: restingModeLocal === opt.value ? 'rgba(52, 211, 153, 0.18)' : 'rgba(255,255,255,0.04)',
-                    border: restingModeLocal === opt.value ? '0.5px solid rgba(52, 211, 153, 0.25)' : '0.5px solid transparent',
+                    background: restingModeLocal === opt.value ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255,255,255,0.04)',
+                    border: restingModeLocal === opt.value ? '0.5px solid rgba(255, 255, 255, 0.12)' : '0.5px solid transparent',
                     borderRadius: 8,
                     padding: '6px 4px',
                     cursor: 'pointer',
@@ -943,7 +1046,7 @@ export function Settings() {
                   <span style={{ fontSize: 13 }}>{opt.icon}</span>
                   <span style={{
                     fontSize: 11,
-                    color: restingModeLocal === opt.value ? colors.healthy : colors.textTertiary,
+                    color: restingModeLocal === opt.value ? colors.textPrimary : colors.textTertiary,
                     transition: 'color 0.15s',
                     whiteSpace: 'nowrap',
                   }}>
@@ -957,7 +1060,7 @@ export function Settings() {
             </span>
           </div>
           {/* Smart silence */}
-          <div style={{ padding: `${spacing.lineGap + 2}px 0`, borderBottom: `0.5px solid rgba(52, 211, 153, 0.10)` }}>
+          <div style={{ padding: `${spacing.lineGap + 2}px 0`, borderBottom: `0.5px solid rgba(255, 255, 255, 0.06)` }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: fontSize.body, color: colors.textPrimary }}>Smart silence</span>
               <ToggleSwitch on={smartSilence.enabled} onToggle={handleSmartSilenceToggle} />
@@ -970,9 +1073,9 @@ export function Settings() {
                 <button
                   onClick={() => handleSilenceUpdate({ weekends: !smartSilence.weekends })}
                   style={{
-                    background: smartSilence.weekends ? 'rgba(52, 211, 153, 0.15)' : 'rgba(255,255,255,0.04)',
+                    background: smartSilence.weekends ? 'rgba(255, 255, 255, 0.10)' : 'rgba(255,255,255,0.04)',
                     border: 'none', borderRadius: 6, fontSize: 12, padding: '4px 8px', cursor: 'pointer',
-                    color: smartSilence.weekends ? colors.healthy : colors.textTertiary,
+                    color: smartSilence.weekends ? colors.textPrimary : colors.textTertiary,
                     transition: 'background 0.15s, color 0.15s', marginLeft: 'auto',
                   }}
                 >
@@ -982,10 +1085,30 @@ export function Settings() {
             )}
           </div>
           {/* Launch at login */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `${spacing.lineGap + 2}px 0` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `${spacing.lineGap + 2}px 0`, borderBottom: hasErrors ? `0.5px solid rgba(255,255,255,0.06)` : 'none' }}>
             <span style={{ fontSize: fontSize.body, color: colors.textPrimary }}>Launch at login</span>
             <ToggleSwitch on={launchAtLogin} onToggle={handleLaunchAtLoginChange} />
           </div>
+          {/* Clear errors */}
+          {hasErrors && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `${spacing.lineGap + 2}px 0` }}>
+              <span style={{ fontSize: fontSize.body, color: colors.textPrimary }}>Clear errors</span>
+              <button
+                onClick={() => useVitalsStore.getState().clearErrors()}
+                style={{
+                  background: 'rgba(239,68,68,0.12)',
+                  border: 'none',
+                  borderRadius: 6,
+                  color: colors.incident,
+                  fontSize: fontSize.labelSecondary,
+                  padding: '3px 10px',
+                  cursor: 'pointer',
+                }}
+              >
+                clear
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1009,11 +1132,11 @@ export function Settings() {
 }
 
 function PrefRow({ label, value, valueColor, last, accent }: { label: string; value: string; valueColor?: string; last?: boolean; accent?: boolean }) {
-  const dividerColor = accent ? 'rgba(52, 211, 153, 0.10)' : colors.divider;
+  const dividerColor = accent ? 'rgba(255, 255, 255, 0.06)' : colors.divider;
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `${spacing.lineGap + 2}px 0`, borderBottom: last ? 'none' : `0.5px solid ${dividerColor}` }}>
       <span style={{ fontSize: fontSize.body, color: colors.textPrimary }}>{label}</span>
-      <span style={{ fontSize: fontSize.labelSecondary, color: valueColor || colors.textTertiary, ...(label === 'Hotkey' ? { background: accent ? 'rgba(52, 211, 153, 0.12)' : colors.subtle, padding: '2px 6px', borderRadius: 3 } : {}) }}>{value}</span>
+      <span style={{ fontSize: fontSize.labelSecondary, color: valueColor || colors.textTertiary, ...(label === 'Hotkey' ? { background: accent ? 'rgba(255, 255, 255, 0.08)' : colors.subtle, padding: '2px 6px', borderRadius: 3 } : {}) }}>{value}</span>
     </div>
   );
 }

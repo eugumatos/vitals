@@ -27,6 +27,9 @@ declare global {
         setToken: (token: string) => Promise<{ success: boolean; error?: string }>;
         disconnect: () => Promise<{ success: boolean }>;
         getSnapshot: () => Promise<{ success: boolean; data?: any; error?: string }>;
+        listProjects: () => Promise<{ success: boolean; data?: Array<{ slug: string; name: string }>; error?: string }>;
+        getWatchedProjects: () => Promise<string[]>;
+        setWatchedProjects: (projects: string[]) => Promise<{ success: boolean }>;
         onSnapshot: (callback: (snapshot: any) => void) => void;
         onError: (callback: (error: string) => void) => void;
       };

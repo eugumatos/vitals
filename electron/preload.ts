@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld('vitals', {
     setToken: (token: string) => ipcRenderer.invoke('sentry:set-token', token),
     disconnect: () => ipcRenderer.invoke('sentry:disconnect'),
     getSnapshot: () => ipcRenderer.invoke('sentry:get-snapshot'),
+    listProjects: () => ipcRenderer.invoke('sentry:list-projects'),
+    getWatchedProjects: () => ipcRenderer.invoke('sentry:get-watched-projects'),
+    setWatchedProjects: (projects: string[]) => ipcRenderer.invoke('sentry:set-watched-projects', projects),
     onSnapshot: (callback: (snapshot: any) => void) => {
       ipcRenderer.on('sentry:snapshot', (_event, snapshot) => callback(snapshot));
     },

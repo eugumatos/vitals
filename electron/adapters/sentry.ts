@@ -1,4 +1,4 @@
-import { getToken, setToken } from '../store';
+import { getToken, setToken, getWatchedSentryProjects } from '../store';
 import type { Adapter, Snapshot, Anomaly } from './types';
 
 const API_BASE = 'https://sentry.io/api/0';
@@ -71,8 +71,15 @@ async function resolveOrg(token: string): Promise<string> {
 }
 
 async function fetchIssues(token: string, org: string): Promise<SentrySnapshot['issues']> {
+  const watchedProjects = await getWatchedSentryProjects();
+  const projectQuery = watchedProjects.length > 0
+    ? watchedProjects.map((p) => `project:${p}`).join(' OR ')
+    : '';
+  const query = projectQuery
+    ? `is:unresolved (${projectQuery})`
+    : 'is:unresolved';
   const issues = await sentryFetch<SentryIssue[]>(
-    `/organizations/${org}/issues/?query=is:unresolved&sort=date&limit=15&statsPeriod=24h`,
+    `/organizations/${org}/issues/?query=${encodeURIComponent(query)}&sort=date&limit=15&statsPeriod=14d`,
     token
   );
 
@@ -206,9 +213,12 @@ export async function initAdapter(): Promise<void> {
 }
 
 export async function setSentryToken(token: string): Promise<void> {
+  // Validate token by resolving org
+  const orgs = await sentryFetch<Array<{ slug: string }>>('/organizations/', token);
+  if (orgs.length === 0) throw new Error('No Sentry organizations found for this token');
   await setToken('sentry', token);
   _cachedToken = token;
-  _orgSlug = null; // re-resolve on next fetch
+  _orgSlug = orgs[0].slug;
 }
 
 export async function disconnectSentry(): Promise<void> {
@@ -216,6 +226,16 @@ export async function disconnectSentry(): Promise<void> {
   await removeToken('sentry');
   _cachedToken = null;
   _orgSlug = null;
+}
+
+export async function listSentryProjects(): Promise<Array<{ slug: string; name: string }>> {
+  if (!_cachedToken) throw new Error('Sentry not configured');
+  const org = await resolveOrg(_cachedToken);
+  const projects = await sentryFetch<Array<{ slug: string; name: string }>>(
+    `/organizations/${org}/projects/?per_page=100`,
+    _cachedToken,
+  );
+  return projects.map((p) => ({ slug: p.slug, name: p.name }));
 }
 
 export function getSnapshotHistory(): Snapshot[] {

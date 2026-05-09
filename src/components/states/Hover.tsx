@@ -3,6 +3,7 @@ import { useVitalsStore } from '../../store/useVitalsStore';
 import { colors, fontSize, spacing, fonts } from '../../lib/design-tokens';
 import { SkeletonList, Skeleton } from '../ui/Skeleton';
 import { formatTimeAgo } from '../../lib/utils';
+import type { SentryData } from '../../store/types';
 
 type EnvFilter = 'all' | 'production' | 'preview';
 
@@ -53,6 +54,9 @@ export function Hover() {
   const hasCommits = (github.commits || []).length > 0;
   const hasGitHubData = hasPRs || hasActions || hasCommits;
   const hasVercelData = vercel && vercel.deployments.length > 0;
+  const sentryConnected = connectors.find((c) => c.id === 'sentry')?.connected;
+  const sentry = hoverData.sentry;
+  const hasSentryData = sentry != null;
   const lastPolledAt = useVitalsStore((s) => s.lastPolledAt);
 
   // Generic service data
@@ -71,11 +75,15 @@ export function Hover() {
   const chromeSnapshot = isChrome ? hoverData.chrome : null;
   const hasChromeData = chromeSnapshot?.data != null;
 
+  const isSentry = activeIntegration === 'sentry';
+
   const isConnected = activeIntegration === 'vercel' ? vercelConnected
     : activeIntegration === 'github' ? githubConnected
+    : activeIntegration === 'sentry' ? sentryConnected
     : activeConnected;
   const hasData = activeIntegration === 'vercel' ? hasVercelData
     : activeIntegration === 'github' ? hasGitHubData
+    : activeIntegration === 'sentry' ? hasSentryData
     : isChrome ? hasChromeData
     : isAnthropic ? hasAnthropicData
     : hasServiceData;
@@ -118,7 +126,9 @@ export function Hover() {
               ? 'no recent deploys'
               : activeIntegration === 'github'
                 ? 'no activity on watched repos'
-                : 'no data available'}
+                : activeIntegration === 'sentry'
+                  ? 'waiting for sentry data — check token permissions'
+                  : 'no data available'}
         </div>
         {!isConnected && (
           <button
@@ -155,7 +165,7 @@ export function Hover() {
       {/* pull requests */}
       {activeIntegration === 'github' && hasPRs && (
         <div style={{ marginBottom: spacing.sectionGap - 2 }}>
-          <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase', marginBottom: spacing.lineGap }}>
+          <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginBottom: spacing.lineGap }}>
             pull requests
           </div>
           {github.prs.slice(0, 4).map((pr, i, arr) => (
@@ -217,7 +227,7 @@ export function Hover() {
             borderTop: hasPRs ? `0.5px solid ${colors.divider}` : 'none',
           }}
         >
-          <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase', marginBottom: spacing.lineGap }}>
+          <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginBottom: spacing.lineGap }}>
             actions
           </div>
           {github.actions.slice(0, 4).map((run, i, arr) => (
@@ -284,7 +294,7 @@ export function Hover() {
             borderTop: (hasPRs || hasActions) ? `0.5px solid ${colors.divider}` : 'none',
           }}
         >
-          <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase', marginBottom: spacing.lineGap }}>
+          <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginBottom: spacing.lineGap }}>
             recent commits
           </div>
           {(github.commits || []).slice(0, 4).map((commit, i, arr) => (
@@ -431,6 +441,11 @@ export function Hover() {
         );
       })()}
 
+      {/* Sentry issues */}
+      {isSentry && hasSentryData && (
+        <SentryView data={sentry!} />
+      )}
+
       {/* Claude Code analytics */}
       {isAnthropic && hasAnthropicData && (
         <ClaudeCodeView data={anthropicSnapshot!.data} />
@@ -446,7 +461,7 @@ export function Hover() {
         <ChromeLogsView data={chromeSnapshot!.data} />
       )}
 
-      {/* bottom summary */}
+      {/* bottom summary — contextual per integration */}
       <div
         style={{
           marginTop: 'auto',
@@ -456,31 +471,100 @@ export function Hover() {
           gap: 14,
         }}
       >
-        <div>
-          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>error rate</span>
-          <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
-            {hoverData.errorRate.value}
-          </div>
-        </div>
-        <div>
-          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>conversion</span>
-          <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
-            {hoverData.conversion.value}
-          </div>
-        </div>
-        <div>
-          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>events/min</span>
-          <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
-            {hoverData.eventsPerMin.value}
-          </div>
-        </div>
-        {github.notifications > 0 && (
-          <div style={{ marginLeft: 'auto' }}>
-            <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>notifications</span>
-            <div style={{ fontSize: fontSize.bodyLarge, color: colors.action, fontVariantNumeric: 'tabular-nums' }}>
-              {github.notifications}
+        {activeIntegration === 'github' && (() => {
+          const openPRs = github.prs.length;
+          const needsReview = github.prs.filter((p) => p.status === 'needs_review').length;
+          const failedRuns = github.actions.filter((a) => a.conclusion === 'failure').length;
+          const passingRuns = github.actions.filter((a) => a.conclusion === 'success').length;
+          const totalRuns = github.actions.length;
+          const commitCount = (github.commits || []).length;
+          return (
+            <>
+              <div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>PRs</span>
+                <div style={{ fontSize: fontSize.bodyLarge, color: needsReview > 0 ? colors.anomaly : colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
+                  {openPRs}{needsReview > 0 ? <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}> · {needsReview} review</span> : null}
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>CI</span>
+                <div style={{ fontSize: fontSize.bodyLarge, color: failedRuns > 0 ? colors.incident : colors.healthy, fontVariantNumeric: 'tabular-nums' }}>
+                  {failedRuns > 0 ? `${failedRuns} failed` : totalRuns > 0 ? `${passingRuns}/${totalRuns}` : '—'}
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>commits</span>
+                <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
+                  {commitCount}
+                </div>
+              </div>
+            </>
+          );
+        })()}
+        {activeIntegration === 'vercel' && hasVercelData && (() => {
+          const deploys = vercel!.deployments;
+          const ready = deploys.filter((d) => d.state === 'READY').length;
+          const errors = deploys.filter((d) => d.state === 'ERROR').length;
+          const building = deploys.filter((d) => d.state === 'BUILDING' || d.state === 'QUEUED').length;
+          return (
+            <>
+              <div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>ready</span>
+                <div style={{ fontSize: fontSize.bodyLarge, color: colors.healthy, fontVariantNumeric: 'tabular-nums' }}>{ready}</div>
+              </div>
+              {errors > 0 && (
+                <div>
+                  <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>errors</span>
+                  <div style={{ fontSize: fontSize.bodyLarge, color: colors.incident, fontVariantNumeric: 'tabular-nums' }}>{errors}</div>
+                </div>
+              )}
+              {building > 0 && (
+                <div>
+                  <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>building</span>
+                  <div style={{ fontSize: fontSize.bodyLarge, color: colors.anomaly, fontVariantNumeric: 'tabular-nums' }}>{building}</div>
+                </div>
+              )}
+              <div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>projects</span>
+                <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>{vercel!.projects.length}</div>
+              </div>
+            </>
+          );
+        })()}
+        {activeIntegration === 'sentry' && hasSentryData && (() => {
+          const { totalErrors24h, unresolvedCount, newIssues24h } = sentry!.stats;
+          return (
+            <>
+              <div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>Errors 24h</span>
+                <div style={{ fontSize: fontSize.bodyLarge, color: totalErrors24h > 100 ? colors.incident : colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
+                  {totalErrors24h > 1000 ? `${(totalErrors24h / 1000).toFixed(1)}k` : totalErrors24h}
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>Unresolved</span>
+                <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>{unresolvedCount}</div>
+              </div>
+              {newIssues24h > 0 && (
+                <div>
+                  <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>New 24h</span>
+                  <div style={{ fontSize: fontSize.bodyLarge, color: colors.anomaly, fontVariantNumeric: 'tabular-nums' }}>{newIssues24h}</div>
+                </div>
+              )}
+            </>
+          );
+        })()}
+        {activeIntegration !== 'github' && activeIntegration !== 'vercel' && activeIntegration !== 'sentry' && (
+          <>
+            <div>
+              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>error rate</span>
+              <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>{hoverData.errorRate.value}</div>
             </div>
-          </div>
+            <div>
+              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>conversion</span>
+              <div style={{ fontSize: fontSize.bodyLarge, color: colors.textPrimary, fontVariantNumeric: 'tabular-nums' }}>{hoverData.conversion.value}</div>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -489,6 +573,124 @@ export function Hover() {
 
 // Chrome logs view with level filter
 type LogLevel = 'all' | 'error' | 'warning' | 'log' | 'info';
+
+const SENTRY_PERIOD_OPTIONS = [
+  { label: '1d', days: 1 },
+  { label: '3d', days: 3 },
+  { label: '7d', days: 7 },
+  { label: '14d', days: 14 },
+];
+
+function SentryView({ data }: { data: SentryData }) {
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [periodDays, setPeriodDays] = useState(7);
+
+  const levelColor = (level: string) =>
+    level === 'error' || level === 'fatal' ? colors.incident : colors.anomaly;
+
+  const projects = [...new Set(data.issues.map((i) => i.project))];
+  const cutoff = Date.now() - periodDays * 24 * 60 * 60 * 1000;
+
+  const filtered = data.issues
+    .filter((i) => projectFilter === 'all' || i.project === projectFilter)
+    .filter((i) => new Date(i.lastSeen).getTime() > cutoff);
+
+  return (
+    <div style={{ marginBottom: spacing.sectionGap - 2 }}>
+      {/* Filters */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lineGap }}>
+        <div style={{ display: 'flex', gap: 3 }}>
+          <button
+            onClick={() => setProjectFilter('all')}
+            style={{
+              background: projectFilter === 'all' ? 'rgba(255,255,255,0.12)' : colors.subtle,
+              border: 'none', borderRadius: 6, fontSize: fontSize.labelSecondary, fontFamily: fonts.mono,
+              color: projectFilter === 'all' ? colors.action : colors.textTertiary,
+              padding: '2px 6px', cursor: 'pointer',
+            }}
+          >all</button>
+          {projects.map((p) => (
+            <button
+              key={p}
+              onClick={() => setProjectFilter(p)}
+              style={{
+                background: projectFilter === p ? 'rgba(255,255,255,0.12)' : colors.subtle,
+                border: 'none', borderRadius: 6, fontSize: fontSize.labelSecondary, fontFamily: fonts.mono,
+                color: projectFilter === p ? colors.action : colors.textTertiary,
+                padding: '2px 6px', cursor: 'pointer',
+                maxWidth: 90, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+            >{p}</button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {SENTRY_PERIOD_OPTIONS.map((opt) => (
+            <button
+              key={opt.days}
+              onClick={() => setPeriodDays(opt.days)}
+              style={{
+                background: periodDays === opt.days ? 'rgba(255,255,255,0.12)' : colors.subtle,
+                border: 'none', borderRadius: 6, fontSize: fontSize.labelSecondary,
+                color: periodDays === opt.days ? colors.action : colors.textTertiary,
+                padding: '2px 6px', cursor: 'pointer', fontVariantNumeric: 'tabular-nums',
+              }}
+            >{opt.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Issues */}
+      {filtered.length === 0 ? (
+        <div style={{ fontSize: fontSize.body, color: colors.textTertiary, textAlign: 'center', padding: 16 }}>
+          no issues in the last {periodDays}d
+        </div>
+      ) : filtered.slice(0, 6).map((issue, i, arr) => (
+        <div
+          key={issue.id}
+          onClick={() => { if (issue.permalink) window.vitals.openExternal(issue.permalink); }}
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            paddingBottom: i < arr.length - 1 ? spacing.lineGap : 0,
+            borderBottom: i < arr.length - 1 ? `0.5px solid ${colors.divider}` : 'none',
+            marginBottom: i < arr.length - 1 ? spacing.lineGap : 0,
+            cursor: issue.permalink ? 'pointer' : 'default',
+          }}
+        >
+          <StatusDot color={levelColor(issue.level)} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span
+              style={{
+                fontSize: fontSize.body,
+                color: colors.textPrimary,
+                display: 'block',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {issue.title}
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>{issue.project}</span>
+              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>{issue.count}x</span>
+              {issue.isNew && (
+                <span style={{ fontSize: 10, color: colors.info, background: 'rgba(96,165,250,0.12)', padding: '1px 4px', borderRadius: 4 }}>new</span>
+              )}
+              {issue.isUnhandled && (
+                <span style={{ fontSize: 10, color: colors.incident, background: 'rgba(239,68,68,0.12)', padding: '1px 4px', borderRadius: 4 }}>unhandled</span>
+              )}
+            </div>
+          </div>
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+            {formatTimeAgo(issue.lastSeen)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function ChromeLogsView({ data }: { data: any }) {
   const [filter, setFilter] = useState<LogLevel>('all');
@@ -699,7 +901,7 @@ function GenericServiceView({ service, data }: { service: string; data: any }) {
 
   return (
     <div style={{ marginBottom: spacing.sectionGap - 2 }}>
-      <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase', marginBottom: spacing.lineGap }}>
+      <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginBottom: spacing.lineGap }}>
         {service}
       </div>
       {entries.map(({ key, value }, i) => (

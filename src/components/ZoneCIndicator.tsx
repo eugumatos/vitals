@@ -369,6 +369,13 @@ function formatTimeAgo(dateStr: string): string {
 }
 
 // --- Zone C: health status per integration ---
+// Only consider recent data as "active" — older items are history, not current state.
+
+const RECENT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+
+function isRecent(dateStr: string): boolean {
+  return Date.now() - new Date(dateStr).getTime() < RECENT_WINDOW_MS;
+}
 
 function extractHealthSlides(hoverData: HoverData, connectedIds: string[]): WingSlide[] {
   const slides: WingSlide[] = [];
@@ -378,43 +385,42 @@ function extractHealthSlides(hoverData: HoverData, connectedIds: string[]): Wing
       case 'github': {
         const gh = hoverData.github;
         if (!gh) break;
+        // Only count failures from recent runs — old failures are not current state
+        const recentActions = gh.actions.filter((a) => isRecent(a.updatedAt));
+        const failedActions = recentActions.filter((a) => a.conclusion === 'failure').length;
+        const inProgress = recentActions.filter((a) => a.conclusion === null || a.status === 'in_progress').length;
         const prsNeedReview = gh.prs.filter((p) => p.status === 'needs_review').length;
-        const failedActions = gh.actions.filter((a) => a.conclusion === 'failure').length;
         if (failedActions > 0) {
           slides.push({ id, color: colors.incident, label: `${failedActions} failed` });
+        } else if (inProgress > 0) {
+          slides.push({ id, color: colors.anomaly, label: `${inProgress} running` });
         } else if (prsNeedReview > 0) {
           slides.push({ id, color: colors.anomaly, label: `${prsNeedReview} review` });
-        } else if (gh.notifications > 0) {
-          slides.push({ id, color: colors.info, label: `${gh.notifications} notif` });
-        } else {
-          slides.push({ id, color: colors.healthy, label: 'clear' });
         }
         break;
       }
       case 'vercel': {
         const v = hoverData.vercel;
         if (!v) break;
-        const errorDeploys = v.deployments.filter((d) => d.state === 'ERROR' || d.state === 'CANCELED').length;
-        const building = v.deployments.filter((d) => d.state === 'BUILDING' || d.state === 'QUEUED').length;
+        // Only recent deploys reflect current state
+        const recent = v.deployments.filter((d) => isRecent(d.createdAt));
+        const errorDeploys = recent.filter((d) => d.state === 'ERROR' || d.state === 'CANCELED').length;
+        const building = recent.filter((d) => d.state === 'BUILDING' || d.state === 'QUEUED').length;
         if (errorDeploys > 0) {
           slides.push({ id, color: colors.incident, label: `${errorDeploys} error` });
         } else if (building > 0) {
           slides.push({ id, color: colors.anomaly, label: `${building} building` });
-        } else {
-          slides.push({ id, color: colors.healthy, label: `${v.deployments.length} deploys` });
         }
         break;
       }
       case 'sentry': {
         const s = hoverData.sentry;
         if (!s) break;
-        const { totalErrors24h, unresolvedCount, newIssues24h } = s.stats;
+        const { totalErrors24h, newIssues24h } = s.stats;
         if (totalErrors24h > 100) {
           slides.push({ id, color: colors.incident, label: `${totalErrors24h > 1000 ? `${(totalErrors24h / 1000).toFixed(1)}k` : totalErrors24h} err/24h` });
         } else if (newIssues24h > 0) {
           slides.push({ id, color: colors.anomaly, label: `${newIssues24h} new` });
-        } else {
-          slides.push({ id, color: colors.healthy, label: `${unresolvedCount} open` });
         }
         break;
       }
@@ -423,13 +429,9 @@ function extractHealthSlides(hoverData: HoverData, connectedIds: string[]): Wing
         const snap = hoverData[id];
         if (!snap?.data) break;
         const usage = snap.data.usage;
-        if (usage?.totalCost != null) {
-          const cost = usage.totalCost;
-          const costStr = cost >= 100 ? `$${Math.round(cost)}` : `$${cost.toFixed(2)}`;
-          slides.push({ id, color: cost > 50 ? colors.anomaly : colors.healthy, label: costStr });
-        } else if (usage?.totalRequests != null) {
-          const reqs = usage.totalRequests;
-          slides.push({ id, color: colors.healthy, label: `${reqs > 1000 ? `${(reqs / 1000).toFixed(1)}k` : reqs} reqs` });
+        if (usage?.totalCost != null && usage.totalCost > 50) {
+          const costStr = usage.totalCost >= 100 ? `$${Math.round(usage.totalCost)}` : `$${usage.totalCost.toFixed(2)}`;
+          slides.push({ id, color: colors.anomaly, label: costStr });
         }
         break;
       }
@@ -444,28 +446,7 @@ function extractHealthSlides(hoverData: HoverData, connectedIds: string[]): Wing
             slides.push({ id, color: colors.incident, label: `${alerting} alert` });
           } else if (warn > 0) {
             slides.push({ id, color: colors.anomaly, label: `${warn} warn` });
-          } else {
-            slides.push({ id, color: colors.healthy, label: `${monitors.length} ok` });
           }
-        }
-        break;
-      }
-      case 'posthog': {
-        const snap = hoverData.posthog;
-        if (!snap?.data) break;
-        const flags = snap.data.featureFlags;
-        if (Array.isArray(flags)) {
-          const active = flags.filter((f: any) => f.active).length;
-          slides.push({ id, color: colors.healthy, label: `${active} flags` });
-        }
-        break;
-      }
-      case 'segment': {
-        const snap = hoverData.segment;
-        if (!snap?.data) break;
-        const sources = snap.data.sources;
-        if (Array.isArray(sources)) {
-          slides.push({ id, color: colors.healthy, label: `${sources.length} src` });
         }
         break;
       }
@@ -475,8 +456,6 @@ function extractHealthSlides(hoverData: HoverData, connectedIds: string[]): Wing
         const errors = snap.data.errors;
         if (Array.isArray(errors) && errors.length > 0) {
           slides.push({ id, color: colors.incident, label: `${errors.length} err` });
-        } else {
-          slides.push({ id, color: colors.healthy, label: 'clear' });
         }
         break;
       }

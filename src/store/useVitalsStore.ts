@@ -43,6 +43,7 @@ interface VitalsStore {
   updateSentrySnapshot: (data: any) => void;
   updateServiceSnapshot: (service: string, data: any) => void;
   setServiceError: (service: string, error: string | null) => void;
+  clearErrors: () => void;
   updateConnectorStatus: (status: Record<string, boolean>) => void;
   setConnectorConnected: (id: string, connected: boolean) => void;
   setDeviceFlow: (update: Partial<DeviceFlowState>) => void;
@@ -228,6 +229,10 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
     set((prev) => ({
       serviceErrors: { ...prev.serviceErrors, [service]: error },
     }));
+  },
+
+  clearErrors: () => {
+    set({ serviceErrors: {} });
   },
 
   updateConnectorStatus: (status: Record<string, boolean>) => {

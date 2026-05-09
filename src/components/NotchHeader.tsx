@@ -186,6 +186,34 @@ function RefreshButton() {
   );
 }
 
+function ClearErrorsButton() {
+  const clearErrors = useVitalsStore((s) => s.clearErrors);
+  return (
+    <button
+      onClick={clearErrors}
+      style={{
+        background: 'none',
+        border: 'none',
+        borderRadius: 8,
+        padding: 5,
+        cursor: 'pointer',
+        color: colors.incident,
+        display: 'flex',
+        alignItems: 'center',
+        transition: 'color 0.2s, transform 0.2s ease',
+        flexShrink: 0,
+      }}
+      title="clear errors"
+      onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.15)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}>
+        <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z" />
+      </svg>
+    </button>
+  );
+}
+
 export function NotchHeader() {
   const state = useVitalsStore((s) => s.state);
   const setState = useVitalsStore((s) => s.setState);
@@ -311,7 +339,6 @@ export function NotchHeader() {
                 cursor: 'pointer',
                 color: active ? colors.textPrimary : colors.textTertiary,
                 fontSize: 12,
-                textTransform: 'lowercase',
                 transition: 'color 0.2s, background 0.2s',
               }}
             >

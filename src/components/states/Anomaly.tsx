@@ -290,7 +290,7 @@ export function Anomaly() {
                 <div style={{ marginTop: 2 }}><CIFailIcon /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase' }}>{action.repo}</span>
+                    <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary,  }}>{action.repo}</span>
                     <span style={{ fontSize: fontSize.body, color: colors.anomaly }}>{action.name} failed</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
@@ -308,7 +308,7 @@ export function Anomaly() {
 
           {github.commits.length > 0 && (
             <div style={{ marginTop: spacing.sectionGap, paddingTop: spacing.sectionGap, borderTop: `0.5px solid ${colors.divider}` }}>
-              <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase', marginBottom: spacing.lineGap }}>recent commits</div>
+              <div style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, marginBottom: spacing.lineGap }}>recent commits</div>
               {github.commits.slice(0, 3).map((c, i, arr) => (
                 <div key={c.fullSha} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: i < arr.length - 1 ? spacing.lineGap : 0, borderBottom: i < arr.length - 1 ? `0.5px solid ${colors.divider}` : 'none', marginBottom: i < arr.length - 1 ? spacing.lineGap : 0 }}>
                   <CommitIcon />
@@ -385,10 +385,15 @@ export function Anomaly() {
               return (
                 <div
                   key={deploy.uid}
+                  onClick={() => {
+                    const url = deploy.inspectorUrl || deploy.url;
+                    if (url) window.vitals.openExternal(url.startsWith('http') ? url : `https://${url}`);
+                  }}
                   style={{
                     display: 'flex', alignItems: 'flex-start', gap: 10,
                     paddingBottom: spacing.lineGap + 2,
                     borderBottom: i < arr.length - 1 ? `0.5px solid ${colors.divider}` : 'none',
+                    cursor: 'pointer',
                   }}
                 >
                   <div style={{ marginTop: 2 }}>
@@ -408,15 +413,6 @@ export function Anomaly() {
                       {deploy.branch && (
                         <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>{deploy.branch}</span>
                       )}
-                      <button
-                        onClick={() => {
-                          const url = deploy.inspectorUrl || deploy.url;
-                          if (url) window.vitals.openExternal(url.startsWith('http') ? url : `https://${url}`);
-                        }}
-                        style={{ background: colors.subtle, border: 'none', borderRadius: 6, padding: '1px 4px', fontSize: fontSize.labelSecondary, color: colors.action, cursor: 'pointer', marginLeft: 'auto' }}
-                      >
-                        view
-                      </button>
                     </div>
                   </div>
                   <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatTimeAgoWithSuffix(deploy.createdAt)}</span>

@@ -208,8 +208,8 @@ export function Incident() {
               <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>
                 {filteredLogs.length} {logFilter === 'all' ? 'entries' : logFilter === 'error' ? 'errors' : 'warnings'}
               </span>
-              <span style={{ fontSize: 10, color: logSource === 'runtime' ? colors.healthy : colors.textTertiary, background: colors.subtle, padding: '1px 4px', borderRadius: 3 }}>
-                {logSource}
+              <span style={{ fontSize: 10, color: logSource === 'runtime' ? colors.healthy : colors.anomaly, background: logSource === 'runtime' ? 'rgba(52,211,153,0.12)' : 'rgba(245,185,66,0.12)', padding: '2px 6px', borderRadius: 4, fontWeight: 500 }}>
+                {logSource === 'runtime' ? 'Runtime' : 'Build'}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 3 }}>
@@ -252,17 +252,8 @@ export function Incident() {
               </div>
             )}
             {logSource === 'build' && (
-              <div style={{ fontSize: 10, color: colors.textTertiary, textAlign: 'center', padding: '4px 0 6px', borderBottom: `0.5px solid ${colors.divider}` }}>
-                no runtime logs available — showing build output.{' '}
-                <button
-                  onClick={() => {
-                    const proj = selectedProject !== 'all' ? selectedProject : logProjectNames[0];
-                    if (proj) window.vitals.openExternal(`https://vercel.com/${proj}/logs`);
-                  }}
-                  style={{ background: 'none', border: 'none', color: colors.action, fontSize: 10, cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
-                >
-                  open runtime logs
-                </button>
+              <div style={{ fontSize: 11, color: colors.anomaly, textAlign: 'center', padding: '4px 0 8px', borderBottom: `0.5px solid ${colors.divider}` }}>
+                No runtime logs — showing build output
               </div>
             )}
             {filteredLogs.map((log, i) => (

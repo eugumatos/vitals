@@ -36,6 +36,7 @@ import {
   initAdapter as initSentryAdapter,
   setSentryToken,
   disconnectSentry,
+  listSentryProjects,
 } from './adapters/sentry';
 import {
   openaiAdapter,
@@ -77,7 +78,7 @@ import {
   setSnapshotCallback as setChromeSnapshotCallback,
   stopChrome,
 } from './adapters/chrome';
-import { removeToken, getAllTokenStatus, getWatchedRepos, setWatchedRepos, getWatchedVercelProjects, setWatchedVercelProjects, getPollingInterval, setPollingInterval as setPollingIntervalStore, getRestingMode, setRestingMode as setRestingModeStore, getLaunchAtLogin, setLaunchAtLogin as setLaunchAtLoginStore, getSmartSilence, setSmartSilence as setSmartSilenceStore, isInSilenceWindow } from './store';
+import { removeToken, getAllTokenStatus, getWatchedRepos, setWatchedRepos, getWatchedVercelProjects, setWatchedVercelProjects, getWatchedSentryProjects, setWatchedSentryProjects, getPollingInterval, setPollingInterval as setPollingIntervalStore, getRestingMode, setRestingMode as setRestingModeStore, getLaunchAtLogin, setLaunchAtLogin as setLaunchAtLoginStore, getSmartSilence, setSmartSilence as setSmartSilenceStore, isInSilenceWindow } from './store';
 import type { SmartSilenceConfig } from './store';
 import type { WatchedRepo } from './store';
 
@@ -470,6 +471,24 @@ function setupIPC(): void {
   ipcMain.handle('sentry:disconnect', async () => {
     stopSentryPolling();
     await disconnectSentry();
+    return { success: true };
+  });
+
+  ipcMain.handle('sentry:list-projects', async () => {
+    try {
+      const projects = await listSentryProjects();
+      return { success: true, data: projects };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('sentry:get-watched-projects', async () => {
+    return await getWatchedSentryProjects();
+  });
+
+  ipcMain.handle('sentry:set-watched-projects', async (_event, projects: string[]) => {
+    await setWatchedSentryProjects(projects);
     return { success: true };
   });
 

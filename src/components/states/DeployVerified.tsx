@@ -61,7 +61,7 @@ export function DeployVerified() {
 
       {restingDeploy.repo && (
         <div>
-          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, textTransform: 'lowercase' }}>
+          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary,  }}>
             repo
           </span>
           <div style={{ fontSize: fontSize.body, color: colors.textPrimary, marginTop: 1, fontFamily: fonts.mono }}>

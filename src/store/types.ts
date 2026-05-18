@@ -39,7 +39,7 @@ export interface AnomalyEvent {
 }
 
 export interface TimelineEntry {
-  source: 'vercel' | 'sentry' | 'github' | 'posthog' | 'segment';
+  source: 'vercel' | 'sentry' | 'github' | 'segment';
   label: string;
   detail: string;
   timestamp: string;
@@ -60,16 +60,17 @@ export interface HoverData {
   openai: ServiceSnapshotData | null;
   anthropic: ServiceSnapshotData | null;
   datadog: ServiceSnapshotData | null;
-  posthog: ServiceSnapshotData | null;
-  segment: ServiceSnapshotData | null;
-  chrome: ServiceSnapshotData | null;
+  supabase: ServiceSnapshotData | null;
   github: {
     prs: Array<{
       number: number;
       title: string;
       author: string;
+      isAuthor: boolean;
+      isReviewRequested: boolean;
       branch: string;
       repo: string;
+      repoFullName: string;
       status: 'needs_review' | 'approved' | 'changes_requested' | 'draft';
     }>;
     actions: Array<{
@@ -83,17 +84,17 @@ export interface HoverData {
       status: string;
       updatedAt: string;
     }>;
-    commits: Array<{
-      sha: string;
-      fullSha: string;
-      message: string;
-      author: string;
-      branch: string;
+    notifications: Array<{
+      id: string;
+      title: string;
+      reason: string;
+      type: string;
       repo: string;
       repoFullName: string;
-      date: string;
+      url: string;
+      unread: boolean;
+      updatedAt: string;
     }>;
-    notifications: number;
   };
 }
 
@@ -112,6 +113,12 @@ export interface VercelLogLine {
   text: string;
   type: 'error' | 'warning' | 'info';
   timestamp: string;
+  // HTTP request metadata (when available from proxy events)
+  method?: string;
+  path?: string;
+  statusCode?: number;
+  duration?: number;
+  requestId?: string;
 }
 
 export interface VercelProjectLogs {
@@ -188,4 +195,32 @@ export interface ConnectorConfig {
   name: string;
   connected: boolean;
   icon: string;
+}
+
+export interface StreakData {
+  currentStreak: number;
+  longestStreak: number;
+  todayCount: number;
+  isActiveToday: boolean;
+  lastDeployAt: string | null;
+}
+
+export type NotificationKind = 'deploy' | 'anomaly' | 'action' | 'error';
+
+export interface VitalsNotification {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  severity: 'info' | 'warning' | 'critical';
+  /** Which service(s) triggered this */
+  sources: string[];
+  /** Navigate to this integration when clicked */
+  targetIntegration?: string;
+  /** Navigate to this state when clicked */
+  targetState?: VitalsState;
+  /** Associated anomaly id, if any */
+  anomalyId?: string;
+  timestamp: string;
+  read: boolean;
 }

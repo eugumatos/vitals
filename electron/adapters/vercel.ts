@@ -27,6 +27,11 @@ export interface VercelLogLine {
   text: string;
   type: 'error' | 'warning' | 'info';
   timestamp: string;
+  method?: string;
+  path?: string;
+  statusCode?: number;
+  duration?: number;
+  requestId?: string;
 }
 
 export interface VercelSnapshot {
@@ -95,71 +100,90 @@ async function fetchDeployments(token: string): Promise<VercelSnapshot['deployme
   }));
 }
 
+function parseEventToLogLine(event: any): VercelLogLine | null {
+  const proxy = event.payload?.proxy;
+  const text = event.payload?.text || event.payload?.message || event.text || '';
+
+  // Extract HTTP metadata from proxy events
+  const method = proxy?.method || event.payload?.method;
+  const reqPath = proxy?.path || event.payload?.path;
+  const statusCode = proxy?.statusCode ?? event.payload?.statusCode;
+  const duration = proxy?.duration ?? event.payload?.duration;
+  const requestId = event.payload?.requestId || proxy?.requestId;
+
+  // For proxy/request events, generate a readable text if none present
+  const displayText = text.trim()
+    ? text.slice(0, 500)
+    : (method && reqPath && statusCode != null)
+      ? `${method} ${reqPath} → ${statusCode}${duration != null ? ` (${duration}ms)` : ''}`
+      : '';
+
+  if (!displayText) return null;
+
+  // Determine log level
+  let type: VercelLogLine['type'] = 'info';
+  if (
+    event.payload?.level === 'error' ||
+    event.type === 'stderr' ||
+    (statusCode != null && statusCode >= 500) ||
+    /error|ERR|FATAL|uncaught|exception/i.test(text)
+  ) {
+    type = 'error';
+  } else if (
+    event.payload?.level === 'warning' ||
+    (statusCode != null && statusCode >= 400 && statusCode < 500) ||
+    /warn|WARN/i.test(text)
+  ) {
+    type = 'warning';
+  }
+
+  return {
+    text: displayText,
+    type,
+    timestamp: event.date ? new Date(event.date).toISOString() : '',
+    ...(method ? { method } : {}),
+    ...(reqPath ? { path: reqPath } : {}),
+    ...(statusCode != null ? { statusCode } : {}),
+    ...(duration != null ? { duration: Math.round(duration) } : {}),
+    ...(requestId ? { requestId } : {}),
+  };
+}
+
 async function fetchDeployLogs(token: string, deploymentId: string): Promise<{ runtime: VercelLogLine[]; build: VercelLogLine[] }> {
   const runtime: VercelLogLine[] = [];
   const build: VercelLogLine[] = [];
 
-  try {
-    // Fetch runtime logs (excludes build output)
-    const runtimeRes = await fetch(
-      `${API_BASE}/v2/deployments/${deploymentId}/events?builds=0&direction=backward&limit=100`,
-      {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      }
-    );
+  // Fetch runtime and build logs in parallel (always fetch both)
+  const [runtimeRes, buildRes] = await Promise.all([
+    fetch(
+      `${API_BASE}/v2/deployments/${deploymentId}/events?builds=0&direction=backward&limit=200`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+    ).catch(() => null),
+    fetch(
+      `${API_BASE}/v2/deployments/${deploymentId}/events?direction=backward&limit=100`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+    ).catch(() => null),
+  ]);
 
-    if (runtimeRes.ok) {
+  if (runtimeRes?.ok) {
+    try {
       const events = await runtimeRes.json() as any[];
       for (const event of events) {
-        const text = event.payload?.text || event.payload?.message || event.text || '';
-        if (!text.trim()) continue;
-
-        const type: VercelLogLine['type'] =
-          event.payload?.level === 'error' || event.type === 'stderr' || /error|ERR|FATAL|uncaught|exception/i.test(text)
-            ? 'error'
-            : event.payload?.level === 'warning' || /warn|WARN/i.test(text)
-              ? 'warning'
-              : 'info';
-
-        runtime.push({
-          text: text.slice(0, 300),
-          type,
-          timestamp: event.date ? new Date(event.date).toISOString() : '',
-        });
+        const line = parseEventToLogLine(event);
+        if (line) runtime.push(line);
       }
       runtime.reverse(); // oldest first
-    }
-  } catch {}
+    } catch {}
+  }
 
-  // If no runtime logs, fetch build logs as fallback
-  if (runtime.length === 0) {
+  if (buildRes?.ok) {
     try {
-      const buildRes = await fetch(
-        `${API_BASE}/v2/deployments/${deploymentId}/events?direction=backward&limit=80`,
-        {
-          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        }
-      );
-
-      if (buildRes.ok) {
-        const events = await buildRes.json() as any[];
-        for (const event of events) {
-          const text = event.payload?.text || event.payload?.message || event.text || '';
-          if (!text.trim()) continue;
-
-          const type: VercelLogLine['type'] =
-            /error|ERR!|failed|FATAL/i.test(text) ? 'error'
-              : /warn|WARN/i.test(text) ? 'warning'
-              : 'info';
-
-          build.push({
-            text: text.slice(0, 300),
-            type,
-            timestamp: event.date ? new Date(event.date).toISOString() : '',
-          });
-        }
-        build.reverse();
+      const events = await buildRes.json() as any[];
+      for (const event of events) {
+        const line = parseEventToLogLine(event);
+        if (line) build.push(line);
       }
+      build.reverse();
     } catch {}
   }
 
@@ -202,19 +226,20 @@ export const vercelAdapter: Adapter = {
       ? allDeployments.filter((d) => watched.includes(d.project))
       : allDeployments;
 
-    // Fetch logs from the latest deploy of each project (parallel, with timeout)
+    // Fetch runtime logs only — from the latest READY deploy (serving real traffic)
+    // Runtime logs = serverless function console output, HTTP request events
     const projectNames = [...new Set(deployments.map((d) => d.project))];
     const logsPerProject: Record<string, { runtime: VercelLogLine[]; build: VercelLogLine[] }> = {};
 
-    const logTargets = projectNames.slice(0, 3).map((name) => ({
-      name,
-      deploy: deployments.find((d) => d.project === name),
-    })).filter((t) => t.deploy);
+    const logTargets = projectNames.slice(0, 3).map((name) => {
+      const latestReady = deployments.find((d) => d.project === name && d.state === 'READY');
+      return { name, deploy: latestReady };
+    }).filter((t) => t.deploy);
 
     if (logTargets.length > 0) {
-      const empty = { runtime: [] as VercelLogLine[], build: [] as VercelLogLine[] };
-      const withTimeout = (p: Promise<{ runtime: VercelLogLine[]; build: VercelLogLine[] }>, ms: number) =>
-        Promise.race([p, new Promise<typeof empty>((r) => setTimeout(() => r(empty), 10_000))]);
+      const emptyResult = { runtime: [] as VercelLogLine[], build: [] as VercelLogLine[] };
+      const withTimeout = (p: Promise<typeof emptyResult>, ms: number) =>
+        Promise.race([p, new Promise<typeof emptyResult>((r) => setTimeout(() => r(emptyResult), ms))]);
 
       const results = await Promise.all(
         logTargets.map((t) => withTimeout(fetchDeployLogs(token, t.deploy!.uid), 10_000))
@@ -222,9 +247,10 @@ export const vercelAdapter: Adapter = {
 
       for (let i = 0; i < logTargets.length; i++) {
         const { runtime, build } = results[i];
-        if (runtime.length > 0 || build.length > 0) {
-          logsPerProject[logTargets[i].name] = results[i];
-          logTargets[i].deploy!.runtimeLogs = runtime.length > 0 ? runtime : build;
+        // Only include runtime logs — skip build output entirely
+        if (runtime.length > 0) {
+          logsPerProject[logTargets[i].name] = { runtime, build: [] };
+          logTargets[i].deploy!.runtimeLogs = runtime;
         }
       }
     }

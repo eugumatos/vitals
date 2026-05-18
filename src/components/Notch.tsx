@@ -5,25 +5,22 @@ import { stateDimensions } from '../lib/design-tokens';
 import { ZoneCIndicator } from './ZoneCIndicator';
 import { NotchHeader } from './NotchHeader';
 import { Hover } from './states/Hover';
-import { Anomaly } from './states/Anomaly';
-import { Incident } from './states/Incident';
 import { DeployVerified } from './states/DeployVerified';
 import { Onboarding } from './states/Onboarding';
-import { Settings } from './states/Settings';
-
 interface NotchProps {
   onMouseEnter: () => void;
   onMouseLeave: () => void;
 }
 
+// anomaly and incident now handled by each integration's internal tabs
 const stateComponents: Record<string, React.FC | undefined> = {
   resting: undefined,
   hover: Hover,
-  anomaly: Anomaly,
-  incident: Incident,
+  anomaly: Hover,
+  incident: Hover,
   deploy_verified: DeployVerified,
   onboarding: Onboarding,
-  settings: Settings,
+  settings: undefined,
 };
 
 const contentFade = {

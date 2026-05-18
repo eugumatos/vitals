@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('vitals', {
     startDeviceFlow: (clientId: string) => ipcRenderer.invoke('github:start-device-flow', clientId),
     cancelDeviceFlow: () => ipcRenderer.invoke('github:cancel-device-flow'),
     onDeviceFlowSuccess: (callback: () => void) => {
+      ipcRenderer.removeAllListeners('github:device-flow-success');
       ipcRenderer.on('github:device-flow-success', () => callback());
     },
     setToken: (token: string) => ipcRenderer.invoke('github:set-token', token),
@@ -104,29 +105,16 @@ contextBridge.exposeInMainWorld('vitals', {
     },
   },
 
-  // PostHog
-  posthog: {
-    setToken: (token: string) => ipcRenderer.invoke('posthog:set-token', token),
-    disconnect: () => ipcRenderer.invoke('posthog:disconnect'),
-    getSnapshot: () => ipcRenderer.invoke('posthog:get-snapshot'),
+  // Supabase
+  supabase: {
+    setToken: (token: string) => ipcRenderer.invoke('supabase:set-token', token),
+    disconnect: () => ipcRenderer.invoke('supabase:disconnect'),
+    getSnapshot: () => ipcRenderer.invoke('supabase:get-snapshot'),
     onSnapshot: (callback: (snapshot: any) => void) => {
-      ipcRenderer.on('posthog:snapshot', (_event, snapshot) => callback(snapshot));
+      ipcRenderer.on('supabase:snapshot', (_event, snapshot) => callback(snapshot));
     },
     onError: (callback: (error: string) => void) => {
-      ipcRenderer.on('posthog:error', (_event, error) => callback(error));
-    },
-  },
-
-  // Segment
-  segment: {
-    setToken: (token: string) => ipcRenderer.invoke('segment:set-token', token),
-    disconnect: () => ipcRenderer.invoke('segment:disconnect'),
-    getSnapshot: () => ipcRenderer.invoke('segment:get-snapshot'),
-    onSnapshot: (callback: (snapshot: any) => void) => {
-      ipcRenderer.on('segment:snapshot', (_event, snapshot) => callback(snapshot));
-    },
-    onError: (callback: (error: string) => void) => {
-      ipcRenderer.on('segment:error', (_event, error) => callback(error));
+      ipcRenderer.on('supabase:error', (_event, error) => callback(error));
     },
   },
 
@@ -143,19 +131,42 @@ contextBridge.exposeInMainWorld('vitals', {
     },
   },
 
-  // Chrome CDP
-  chrome: {
-    setPort: (port: string) => ipcRenderer.invoke('chrome:set-port', port),
-    disconnect: () => ipcRenderer.invoke('chrome:disconnect'),
-    listTabs: (port: string) => ipcRenderer.invoke('chrome:list-tabs', port),
-    switchTab: (targetId: string) => ipcRenderer.invoke('chrome:switch-tab', targetId),
-    getSnapshot: () => ipcRenderer.invoke('chrome:get-snapshot'),
-    onSnapshot: (callback: (snapshot: any) => void) => {
-      ipcRenderer.on('chrome:snapshot', (_event, snapshot) => callback(snapshot));
-    },
-    onError: (callback: (error: string) => void) => {
-      ipcRenderer.on('chrome:error', (_event, error) => callback(error));
-    },
+  // Deploy completed events
+  onDeployCompleted: (callback: (data: { success: boolean; body: string }) => void) => {
+    ipcRenderer.on('deploy:completed', (_event, data) => callback(data));
+  },
+
+  // Preferences changed from another window
+  onPreferencesChanged: (callback: (changes: Record<string, any>) => void) => {
+    ipcRenderer.on('preferences:changed', (_event, changes) => callback(changes));
+  },
+
+  // Anomaly detection events
+  onAnomalyDetected: (callback: (event: any) => void) => {
+    ipcRenderer.on('anomaly:detected', (_event, data) => callback(data));
+  },
+
+  // Notification events
+  onNotificationPush: (callback: (notification: any) => void) => {
+    ipcRenderer.on('notification:push', (_event, notification) => callback(notification));
+  },
+
+  onNotificationNavigate: (callback: (data: { integration?: string; state?: string; notificationId: string }) => void) => {
+    ipcRenderer.on('notification:navigate', (_event, data) => callback(data));
+  },
+
+  // Data clear events (watched repos/projects changed)
+  onDataClear: (callback: (service: string) => void) => {
+    ipcRenderer.on('data:clear', (_event, service) => callback(service));
+  },
+
+  // Connector status changed (connect/disconnect from any window)
+  onConnectorsChanged: (callback: (status: Record<string, boolean>) => void) => {
+    ipcRenderer.on('connectors:changed', (_event, status) => callback(status));
+  },
+
+  onWatchedReposChanged: (callback: (repos: Array<{ fullName: string; branches: string[] }>) => void) => {
+    ipcRenderer.on('watched-repos:changed', (_event, repos) => callback(repos));
   },
 
   // Shell
@@ -180,4 +191,25 @@ contextBridge.exposeInMainWorld('vitals', {
 
   // Force refresh
   forceRefresh: () => ipcRenderer.invoke('force-refresh'),
+
+  // Open settings window
+  openSettings: () => ipcRenderer.invoke('open-settings'),
+
+  // License
+  license: {
+    activate: (key: string) => ipcRenderer.invoke('license:activate', key),
+    getStatus: () => ipcRenderer.invoke('license:status'),
+    deactivate: () => ipcRenderer.invoke('license:deactivate'),
+  },
+
+  // Streaks
+  streaks: {
+    get: () => ipcRenderer.invoke('streaks:get'),
+    onUpdated: (callback: (data: any) => void) => {
+      ipcRenderer.on('streaks:updated', (_event, data) => callback(data));
+    },
+  },
+
+  // Quit app
+  quit: () => ipcRenderer.invoke('app:quit'),
 });

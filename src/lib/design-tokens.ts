@@ -36,7 +36,7 @@ export const spacing = {
 // Expanded states grow downward from the notch.
 export const stateDimensions = {
   resting: { width: 300, height: 32 },
-  hover: { width: 580, height: 180 },
+  hover: { width: 580, height: 200 },
   anomaly: { width: 580, height: 200 },
   incident: { width: 580, height: 220 },
   deploy_verified: { width: 580, height: 140 },

@@ -57,30 +57,19 @@ import {
   disconnectDatadog,
 } from './adapters/datadog';
 import {
-  posthogAdapter,
-  initAdapter as initPostHogAdapter,
-  setPostHogToken,
-  disconnectPostHog,
-} from './adapters/posthog';
-import {
-  segmentAdapter,
-  initAdapter as initSegmentAdapter,
-  setSegmentToken,
-  disconnectSegment,
-} from './adapters/segment';
-import {
-  chromeAdapter,
-  initAdapter as initChromeAdapter,
-  setChromePort,
-  disconnectChrome,
-  listChromeTabs,
-  switchTab as chromeSwitchTab,
-  setSnapshotCallback as setChromeSnapshotCallback,
-  stopChrome,
-} from './adapters/chrome';
-import { removeToken, getAllTokenStatus, getWatchedRepos, setWatchedRepos, getWatchedVercelProjects, setWatchedVercelProjects, getWatchedSentryProjects, setWatchedSentryProjects, getPollingInterval, setPollingInterval as setPollingIntervalStore, getRestingMode, setRestingMode as setRestingModeStore, getLaunchAtLogin, setLaunchAtLogin as setLaunchAtLoginStore, getSmartSilence, setSmartSilence as setSmartSilenceStore, isInSilenceWindow } from './store';
+  supabaseAdapter,
+  initAdapter as initSupabaseAdapter,
+  setSupabaseToken,
+  disconnectSupabase,
+} from './adapters/supabase';
+import { removeToken, getAllTokenStatus, getWatchedRepos, setWatchedRepos, getWatchedVercelProjects, setWatchedVercelProjects, getWatchedSentryProjects, setWatchedSentryProjects, getPollingInterval, setPollingInterval as setPollingIntervalStore, getRestingMode, setRestingMode as setRestingModeStore, getLaunchAtLogin, setLaunchAtLogin as setLaunchAtLoginStore, getSmartSilence, setSmartSilence as setSmartSilenceStore, isInSilenceWindow, getLicense, setLicense, clearLicense } from './store';
 import type { SmartSilenceConfig } from './store';
 import type { WatchedRepo } from './store';
+import { isLicenseValid, activateLicense, deactivateLicense } from './license';
+import { migrateFromElectronStore } from './secure-store';
+import { addDeploy, closeHistoryDb } from './history-store';
+import type { DeployEvent } from './history-store';
+import { getStreakData, initStreakEngine, invalidateStreakCache } from './streak-engine';
 
 // Smart silence — cached config for fast checks during polling
 let cachedSilenceConfig: SmartSilenceConfig = { enabled: false, startHour: 19, endHour: 8, weekends: true };
@@ -98,10 +87,11 @@ let sentryPollingInterval: ReturnType<typeof setTimeout> | null = null;
 let openaiPollingInterval: ReturnType<typeof setTimeout> | null = null;
 let anthropicPollingInterval: ReturnType<typeof setTimeout> | null = null;
 let datadogPollingInterval: ReturnType<typeof setTimeout> | null = null;
-let posthogPollingInterval: ReturnType<typeof setTimeout> | null = null;
-let segmentPollingInterval: ReturnType<typeof setTimeout> | null = null;
+let supabasePollingInterval: ReturnType<typeof setTimeout> | null = null;
 
 let mainWindow: BrowserWindow | null = null;
+let settingsWindow: BrowserWindow | null = null;
+let activationWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 
 const isDev = process.env.NODE_ENV !== 'production';
@@ -195,6 +185,92 @@ function createWindow(): void {
   });
 }
 
+function openSettingsWindow(): void {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    app.dock?.show();
+    settingsWindow.focus();
+    return;
+  }
+
+  // Show dock so macOS allows the window to appear in foreground
+  app.dock?.show();
+
+  settingsWindow = new BrowserWindow({
+    width: 820,
+    height: 600,
+    minWidth: 700,
+    minHeight: 500,
+    titleBarStyle: 'hiddenInset',
+    vibrancy: 'under-window',
+    backgroundColor: '#1c1c1e',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  if (isDev) {
+    settingsWindow.loadURL('http://localhost:5173/settings.html');
+  } else {
+    settingsWindow.loadFile(path.join(__dirname, '../dist-renderer/settings.html'));
+  }
+
+  settingsWindow.on('closed', () => {
+    settingsWindow = null;
+    // Hide dock again when settings is closed (unless activation is open)
+    if (!activationWindow || activationWindow.isDestroyed()) {
+      app.dock?.hide();
+    }
+  });
+}
+
+function openActivationWindow(errorMessage?: string): void {
+  if (activationWindow && !activationWindow.isDestroyed()) {
+    app.dock?.show();
+    activationWindow.focus();
+    return;
+  }
+
+  app.dock?.show();
+
+  activationWindow = new BrowserWindow({
+    width: 500,
+    height: 400,
+    minWidth: 450,
+    minHeight: 380,
+    resizable: false,
+    titleBarStyle: 'hiddenInset',
+    vibrancy: 'under-window',
+    backgroundColor: '#1c1c1e',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  if (isDev) {
+    activationWindow.loadURL('http://localhost:5173/activation.html');
+  } else {
+    activationWindow.loadFile(path.join(__dirname, '../dist-renderer/activation.html'));
+  }
+
+  if (errorMessage) {
+    activationWindow.webContents.on('did-finish-load', () => {
+      activationWindow?.webContents.send('activation:error', errorMessage);
+    });
+  }
+
+  activationWindow.on('closed', () => {
+    activationWindow = null;
+    // If no main window and activation closed, quit
+    if (!mainWindow) {
+      app.quit();
+    }
+  });
+}
+
 function createTray(): void {
   const icon = createTrayIcon();
   tray = new Tray(icon);
@@ -203,13 +279,7 @@ function createTray(): void {
   const contextMenu = Menu.buildFromTemplate([
     {
       label: 'Configurações',
-      click: () => {
-        if (mainWindow) {
-          mainWindow.webContents.send('state-change', 'settings');
-          mainWindow.setIgnoreMouseEvents(false);
-          mainWindow.show();
-        }
-      },
+      click: () => openSettingsWindow(),
     },
     {
       label: 'Sobre',
@@ -322,6 +392,7 @@ function setupIPC(): void {
       // When device flow completes, start polling
       onDeviceFlowSuccess(() => {
         startGitHubPolling();
+        broadcastConnectorStatus();
         if (mainWindow) {
           mainWindow.webContents.send('github:device-flow-success');
         }
@@ -341,6 +412,7 @@ function setupIPC(): void {
     try {
       await setPersonalToken(token);
       startGitHubPolling();
+      broadcastConnectorStatus();
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -363,6 +435,8 @@ function setupIPC(): void {
   ipcMain.handle('github:disconnect', async () => {
     stopPolling();
     await removeToken('github');
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'github');
+    broadcastConnectorStatus();
     return { success: true };
   });
 
@@ -391,6 +465,10 @@ function setupIPC(): void {
 
   ipcMain.handle('github:set-watched-repos', async (_event, repos: WatchedRepo[]) => {
     await setWatchedRepos(repos);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('data:clear', 'github');
+      mainWindow.webContents.send('watched-repos:changed', repos);
+    }
     return { success: true };
   });
 
@@ -399,6 +477,7 @@ function setupIPC(): void {
     try {
       await setVercelToken(token);
       startVercelPolling();
+      broadcastConnectorStatus();
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -409,6 +488,7 @@ function setupIPC(): void {
     try {
       await startVercelOAuth(clientId, clientSecret);
       startVercelPolling();
+      broadcastConnectorStatus();
       if (mainWindow) {
         mainWindow.webContents.send('vercel:oauth-success');
       }
@@ -426,6 +506,8 @@ function setupIPC(): void {
   ipcMain.handle('vercel:disconnect', async () => {
     stopVercelPolling();
     await disconnectVercel();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'vercel');
+    broadcastConnectorStatus();
     return { success: true };
   });
 
@@ -454,6 +536,7 @@ function setupIPC(): void {
 
   ipcMain.handle('vercel:set-watched-projects', async (_event, projects: string[]) => {
     await setWatchedVercelProjects(projects);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'vercel');
     return { success: true };
   });
 
@@ -462,6 +545,7 @@ function setupIPC(): void {
     try {
       await setSentryToken(token);
       startSentryPolling();
+      broadcastConnectorStatus();
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -471,6 +555,8 @@ function setupIPC(): void {
   ipcMain.handle('sentry:disconnect', async () => {
     stopSentryPolling();
     await disconnectSentry();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'sentry');
+    broadcastConnectorStatus();
     return { success: true };
   });
 
@@ -489,6 +575,7 @@ function setupIPC(): void {
 
   ipcMain.handle('sentry:set-watched-projects', async (_event, projects: string[]) => {
     await setWatchedSentryProjects(projects);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'sentry');
     return { success: true };
   });
 
@@ -506,6 +593,7 @@ function setupIPC(): void {
     try {
       await setOpenAIToken(token);
       startOpenAIPolling();
+      broadcastConnectorStatus();
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -515,6 +603,8 @@ function setupIPC(): void {
   ipcMain.handle('openai:disconnect', async () => {
     stopOpenAIPolling();
     await disconnectOpenAI();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'openai');
+    broadcastConnectorStatus();
     return { success: true };
   });
 
@@ -532,6 +622,7 @@ function setupIPC(): void {
     try {
       await setAnthropicToken(token);
       startAnthropicPolling();
+      broadcastConnectorStatus();
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -541,6 +632,8 @@ function setupIPC(): void {
   ipcMain.handle('anthropic:disconnect', async () => {
     stopAnthropicPolling();
     await disconnectAnthropic();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'anthropic');
+    broadcastConnectorStatus();
     return { success: true };
   });
 
@@ -558,6 +651,7 @@ function setupIPC(): void {
     try {
       await setDatadogToken(token);
       startDatadogPolling();
+      broadcastConnectorStatus();
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -567,6 +661,8 @@ function setupIPC(): void {
   ipcMain.handle('datadog:disconnect', async () => {
     stopDatadogPolling();
     await disconnectDatadog();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'datadog');
+    broadcastConnectorStatus();
     return { success: true };
   });
 
@@ -579,99 +675,29 @@ function setupIPC(): void {
     }
   });
 
-  // PostHog adapter IPC
-  ipcMain.handle('posthog:set-token', async (_event, token: string) => {
+  // Supabase adapter IPC
+  ipcMain.handle('supabase:set-token', async (_event, token: string) => {
     try {
-      await setPostHogToken(token);
-      startPostHogPolling();
+      await setSupabaseToken(token);
+      startSupabasePolling();
+      broadcastConnectorStatus();
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
     }
   });
 
-  ipcMain.handle('posthog:disconnect', async () => {
-    stopPostHogPolling();
-    await disconnectPostHog();
+  ipcMain.handle('supabase:disconnect', async () => {
+    stopSupabasePolling();
+    await disconnectSupabase();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'supabase');
+    broadcastConnectorStatus();
     return { success: true };
   });
 
-  ipcMain.handle('posthog:get-snapshot', async () => {
+  ipcMain.handle('supabase:get-snapshot', async () => {
     try {
-      const snapshot = await posthogAdapter.fetchSnapshot();
-      return { success: true, data: snapshot };
-    } catch (err) {
-      return { success: false, error: String(err) };
-    }
-  });
-
-  // Segment adapter IPC
-  ipcMain.handle('segment:set-token', async (_event, token: string) => {
-    try {
-      await setSegmentToken(token);
-      startSegmentPolling();
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: String(err) };
-    }
-  });
-
-  ipcMain.handle('segment:disconnect', async () => {
-    stopSegmentPolling();
-    await disconnectSegment();
-    return { success: true };
-  });
-
-  ipcMain.handle('segment:get-snapshot', async () => {
-    try {
-      const snapshot = await segmentAdapter.fetchSnapshot();
-      return { success: true, data: snapshot };
-    } catch (err) {
-      return { success: false, error: String(err) };
-    }
-  });
-
-  // Chrome CDP
-  ipcMain.handle('chrome:set-port', async (_event, port: string) => {
-    try {
-      await setChromePort(port);
-      // Set up live snapshot callback
-      setChromeSnapshotCallback((snapshot) => {
-        if (mainWindow) mainWindow.webContents.send('chrome:snapshot', snapshot);
-      });
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: String(err) };
-    }
-  });
-
-  ipcMain.handle('chrome:disconnect', async () => {
-    setChromeSnapshotCallback(null);
-    await disconnectChrome();
-    return { success: true };
-  });
-
-  ipcMain.handle('chrome:list-tabs', async (_event, port: string) => {
-    try {
-      const tabs = await listChromeTabs(port);
-      return { success: true, data: tabs };
-    } catch (err) {
-      return { success: false, error: String(err) };
-    }
-  });
-
-  ipcMain.handle('chrome:switch-tab', async (_event, targetId: string) => {
-    try {
-      await chromeSwitchTab(targetId);
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: String(err) };
-    }
-  });
-
-  ipcMain.handle('chrome:get-snapshot', async () => {
-    try {
-      const snapshot = await chromeAdapter.fetchSnapshot();
+      const snapshot = await supabaseAdapter.fetchSnapshot();
       return { success: true, data: snapshot };
     } catch (err) {
       return { success: false, error: String(err) };
@@ -692,8 +718,7 @@ function setupIPC(): void {
     if (openaiAdapter.isConfigured()) { stopOpenAIPolling(); startOpenAIPolling().catch((e) => console.error('[vitals] Polling restart error:', e)); }
     if (anthropicAdapter.isConfigured()) { stopAnthropicPolling(); startAnthropicPolling().catch((e) => console.error('[vitals] Polling restart error:', e)); }
     if (datadogAdapter.isConfigured()) { stopDatadogPolling(); startDatadogPolling().catch((e) => console.error('[vitals] Polling restart error:', e)); }
-    if (posthogAdapter.isConfigured()) { stopPostHogPolling(); startPostHogPolling().catch((e) => console.error('[vitals] Polling restart error:', e)); }
-    if (segmentAdapter.isConfigured()) { stopSegmentPolling(); startSegmentPolling().catch((e) => console.error('[vitals] Polling restart error:', e)); }
+    if (supabaseAdapter.isConfigured()) { stopSupabasePolling(); startSupabasePolling().catch((e) => console.error('[vitals] Polling restart error:', e)); }
     return { success: true };
   });
 
@@ -704,6 +729,10 @@ function setupIPC(): void {
 
   ipcMain.handle('preferences:set-resting-mode', async (_event, mode: string) => {
     await setRestingModeStore(mode);
+    // Broadcast to all windows
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('preferences:changed', { restingMode: mode });
+    }
     return { success: true };
   });
 
@@ -733,10 +762,73 @@ function setupIPC(): void {
     return isInSilenceWindow(cachedSilenceConfig);
   });
 
+  // Open settings in a separate window
+  ipcMain.handle('open-settings', () => {
+    openSettingsWindow();
+    return { success: true };
+  });
+
+  // License IPC
+  ipcMain.handle('license:activate', async (_event, key: string) => {
+    try {
+      const result = await activateLicense(key, setLicense);
+      if (result.success) {
+        // Close activation window and open main app
+        if (activationWindow && !activationWindow.isDestroyed()) {
+          activationWindow.close();
+          activationWindow = null;
+        }
+        createWindow();
+        createTray();
+        registerShortcuts();
+        startAllPolling();
+      }
+      return result;
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('license:status', async () => {
+    const license = await getLicense();
+    return {
+      activated: !!license.key,
+      key: license.key,
+      machineId: license.machineId,
+      lastValidatedAt: license.lastValidatedAt,
+    };
+  });
+
+  ipcMain.handle('license:deactivate', async () => {
+    const license = await getLicense();
+    if (license.key && license.instanceId) {
+      await deactivateLicense(license.key, license.instanceId);
+    }
+    await clearLicense();
+    return { success: true };
+  });
+
+  // Streaks
+  ipcMain.handle('streaks:get', () => {
+    return getStreakData();
+  });
+
+  // Quit app
+  ipcMain.handle('app:quit', () => {
+    app.quit();
+  });
+
   // Connector status
   ipcMain.handle('connectors:status', async () => {
     return await getAllTokenStatus();
   });
+
+  async function broadcastConnectorStatus() {
+    const status = await getAllTokenStatus();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('connectors:changed', status);
+    }
+  }
 
   // Force refresh all adapters (in parallel)
   ipcMain.handle('force-refresh', async () => {
@@ -747,9 +839,7 @@ function setupIPC(): void {
       { name: 'openai', adapter: openaiAdapter },
       { name: 'anthropic', adapter: anthropicAdapter },
       { name: 'datadog', adapter: datadogAdapter },
-      { name: 'posthog', adapter: posthogAdapter },
-      { name: 'segment', adapter: segmentAdapter },
-      { name: 'chrome', adapter: chromeAdapter },
+      { name: 'supabase', adapter: supabaseAdapter },
     ];
 
     const tasks = adapters
@@ -811,6 +901,38 @@ async function startVercelPolling(): Promise<void> {
       console.log('[vitals] Vercel snapshot received, deploys:', (snapshot.data as any)?.deployments?.length);
       if (mainWindow) {
         mainWindow.webContents.send('vercel:snapshot', snapshot);
+      }
+
+      // Persist completed deploys to history for streak calculation
+      const deployments = (snapshot.data as any)?.deployments || [];
+      let streakChanged = false;
+      for (const d of deployments) {
+        if (d.state === 'READY' || d.state === 'ERROR' || d.state === 'CANCELED') {
+          const conclusion = d.state === 'READY' ? 'success' : d.state === 'ERROR' ? 'failure' : 'cancelled';
+          const event: DeployEvent = {
+            id: d.uid,
+            provider: 'vercel',
+            projectId: d.project || '',
+            commitSha: d.sha || '',
+            status: d.state,
+            conclusion,
+            startedAt: d.createdAt,
+            completedAt: d.readyAt || null,
+            durationMs: d.duration || null,
+            branch: d.branch || '',
+            actor: d.author || '',
+            metadata: { target: d.target, url: d.url },
+          };
+          await addDeploy(event);
+          if (conclusion === 'success') streakChanged = true;
+        }
+      }
+
+      if (streakChanged) {
+        invalidateStreakCache();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('streaks:updated', await getStreakData());
+        }
       }
     } catch (err: any) {
       console.error('[vitals] Vercel polling error:', err.message);
@@ -956,64 +1078,51 @@ function stopDatadogPolling(): void {
   }
 }
 
-async function startPostHogPolling(): Promise<void> {
-  if (!posthogAdapter.isConfigured()) return;
+async function startSupabasePolling(): Promise<void> {
+  if (!supabaseAdapter.isConfigured()) return;
   const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting PostHog polling, interval:', intervalMs / 1000, 's');
+  console.log('[vitals] Starting Supabase polling, interval:', intervalMs / 1000, 's');
 
-  stopPostHogPolling();
+  stopSupabasePolling();
 
   async function poll() {
     try {
-      const snapshot = await posthogAdapter.fetchSnapshot();
-      console.log('[vitals] PostHog snapshot received');
-      if (mainWindow) mainWindow.webContents.send('posthog:snapshot', snapshot);
+      const snapshot = await supabaseAdapter.fetchSnapshot();
+      console.log('[vitals] Supabase snapshot received');
+      if (mainWindow) mainWindow.webContents.send('supabase:snapshot', snapshot);
     } catch (err: any) {
-      console.error('[vitals] PostHog polling error:', err.message);
-      if (mainWindow) mainWindow.webContents.send('posthog:error', err.message);
+      console.error('[vitals] Supabase polling error:', err.message);
+      if (mainWindow) mainWindow.webContents.send('supabase:error', err.message);
     } finally {
-      posthogPollingInterval = setTimeout(poll, intervalMs);
+      supabasePollingInterval = setTimeout(poll, intervalMs);
     }
   }
 
   poll();
 }
 
-function stopPostHogPolling(): void {
-  if (posthogPollingInterval) {
-    clearTimeout(posthogPollingInterval);
-    posthogPollingInterval = null;
+function stopSupabasePolling(): void {
+  if (supabasePollingInterval) {
+    clearTimeout(supabasePollingInterval);
+    supabasePollingInterval = null;
   }
 }
 
-async function startSegmentPolling(): Promise<void> {
-  if (!segmentAdapter.isConfigured()) return;
-  const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting Segment polling, interval:', intervalMs / 1000, 's');
-
-  stopSegmentPolling();
-
-  async function poll() {
-    try {
-      const snapshot = await segmentAdapter.fetchSnapshot();
-      console.log('[vitals] Segment snapshot received');
-      if (mainWindow) mainWindow.webContents.send('segment:snapshot', snapshot);
-    } catch (err: any) {
-      console.error('[vitals] Segment polling error:', err.message);
-      if (mainWindow) mainWindow.webContents.send('segment:error', err.message);
-    } finally {
-      segmentPollingInterval = setTimeout(poll, intervalMs);
-    }
-  }
-
-  poll();
-}
-
-function stopSegmentPolling(): void {
-  if (segmentPollingInterval) {
-    clearTimeout(segmentPollingInterval);
-    segmentPollingInterval = null;
-  }
+function startAllPolling(): void {
+  const pollingStarters = [
+    { configured: githubAdapter.isConfigured(), start: startGitHubPolling },
+    { configured: vercelAdapter.isConfigured(), start: startVercelPolling },
+    { configured: sentryAdapter.isConfigured(), start: startSentryPolling },
+    { configured: openaiAdapter.isConfigured(), start: startOpenAIPolling },
+    { configured: anthropicAdapter.isConfigured(), start: startAnthropicPolling },
+    { configured: datadogAdapter.isConfigured(), start: startDatadogPolling },
+    { configured: supabaseAdapter.isConfigured(), start: startSupabasePolling },
+  ];
+  const activeStarters = pollingStarters.filter((s) => s.configured);
+  const staggerMs = activeStarters.length > 1 ? 2000 : 0;
+  activeStarters.forEach((s, i) => {
+    setTimeout(() => s.start().catch((err: any) => console.error('[vitals] Polling start error:', err)), i * staggerMs);
+  });
 }
 
 function handleProtocolUrl(url: string): void {
@@ -1062,38 +1171,36 @@ if (!gotTheLock) {
 app.dock?.hide();
 
 app.on('ready', async () => {
+  // Migrate tokens from old electron-store to safeStorage (Keychain) — idempotent
+  await migrateFromElectronStore();
+
   setupIPC();
-  await Promise.allSettled([initGitHubAdapter(), initVercelAdapter(), initSentryAdapter(), initOpenAIAdapter(), initAnthropicAdapter(), initDatadogAdapter(), initPostHogAdapter(), initSegmentAdapter(), initChromeAdapter()]);
-  // Set up Chrome live snapshot callback if already configured
-  if (chromeAdapter.isConfigured()) {
-    setChromeSnapshotCallback((snapshot) => {
-      if (mainWindow) mainWindow.webContents.send('chrome:snapshot', snapshot);
-    });
-  }
+  await Promise.allSettled([initGitHubAdapter(), initVercelAdapter(), initSentryAdapter(), initOpenAIAdapter(), initAnthropicAdapter(), initDatadogAdapter(), initSupabaseAdapter()]);
   // Sync preferences on startup
   cachedSilenceConfig = await getSmartSilence();
   const launchEnabled = await getLaunchAtLogin();
   app.setLoginItemSettings({ openAtLogin: launchEnabled });
 
+  // License gate — check before opening main window
+  const licenseResult = await isLicenseValid(getLicense, setLicense);
+
+  if (!licenseResult.valid) {
+    // Show activation window
+    openActivationWindow(licenseResult.error);
+    return;
+  }
+
+  // License valid — proceed normally
   createWindow();
   createTray();
   registerShortcuts();
+  startAllPolling();
 
-  // Stagger polling starts to avoid request bursts
-  const pollingStarters = [
-    { configured: githubAdapter.isConfigured(), start: startGitHubPolling },
-    { configured: vercelAdapter.isConfigured(), start: startVercelPolling },
-    { configured: sentryAdapter.isConfigured(), start: startSentryPolling },
-    { configured: openaiAdapter.isConfigured(), start: startOpenAIPolling },
-    { configured: anthropicAdapter.isConfigured(), start: startAnthropicPolling },
-    { configured: datadogAdapter.isConfigured(), start: startDatadogPolling },
-    { configured: posthogAdapter.isConfigured(), start: startPostHogPolling },
-    { configured: segmentAdapter.isConfigured(), start: startSegmentPolling },
-  ];
-  const activeStarters = pollingStarters.filter((s) => s.configured);
-  const staggerMs = activeStarters.length > 1 ? 2000 : 0;
-  activeStarters.forEach((s, i) => {
-    setTimeout(() => s.start().catch((err: any) => console.error('[vitals] Polling start error:', err)), i * staggerMs);
+  // Initialize streak engine — push updates to renderer on day rollover
+  initStreakEngine(async () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('streaks:updated', await getStreakData());
+    }
   });
 });
 
@@ -1104,10 +1211,9 @@ app.on('will-quit', () => {
   stopOpenAIPolling();
   stopAnthropicPolling();
   stopDatadogPolling();
-  stopPostHogPolling();
-  stopSegmentPolling();
-  stopChrome();
+  stopSupabasePolling();
   globalShortcut.unregisterAll();
+  closeHistoryDb();
 });
 
 app.on('window-all-closed', () => {

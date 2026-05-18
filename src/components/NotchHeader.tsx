@@ -1,22 +1,19 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useVitalsStore } from '../store/useVitalsStore';
-import { colors } from '../lib/design-tokens';
-import type { VitalsState } from '../store/types';
+import { colors, fontSize, fonts } from '../lib/design-tokens';
+import type { VitalsState, VitalsNotification } from '../store/types';
+import { formatTimeAgo } from '../lib/utils';
 
-const navLabels: Record<string, Record<VitalsState, string>> = {
-  github: { hover: 'overview', anomaly: 'anomaly', incident: 'incident', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  vercel: { hover: 'deploys', anomaly: 'warnings', incident: 'logs', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  sentry: { hover: 'issues', anomaly: 'anomaly', incident: 'incident', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  openai: { hover: 'usage', anomaly: 'costs', incident: 'details', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  anthropic: { hover: 'usage', anomaly: 'costs', incident: 'details', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  datadog: { hover: 'monitors', anomaly: 'alerts', incident: 'events', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  posthog: { hover: 'events', anomaly: 'flags', incident: 'insights', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  segment: { hover: 'sources', anomaly: 'status', incident: 'details', resting: '', settings: '', deploy_verified: '', onboarding: '' },
-  chrome: { hover: 'logs', anomaly: 'network', incident: '', resting: '', settings: '', deploy_verified: '', onboarding: '' },
+// Per-integration tab definitions — each integration has its own relevant tabs
+export const integrationTabs: Record<string, string[]> = {
+  github: ['prs', 'actions', 'notifications'],
+  vercel: ['deploys', 'projects'],
+  sentry: ['issues', 'stats'],
+  openai: ['overview', 'models'],
+  anthropic: ['activity', 'models'],
+  datadog: ['monitors', 'events'],
+  supabase: [],  // single view, no tabs needed
 };
-
-const defaultNavIds: VitalsState[] = ['hover', 'anomaly', 'incident'];
-const chromeNavIds: VitalsState[] = ['hover', 'anomaly'];
 
 // --- Icons ---
 
@@ -44,21 +41,11 @@ function SentryIcon({ size = 15 }: { size?: number }) {
   );
 }
 
-function PostHogIcon({ size = 15 }: { size?: number }) {
+function SupabaseIcon({ size = 15 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}>
-      <circle cx="8" cy="8" r="3" />
-      <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
-function SegmentIcon({ size = 15 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}>
-      <rect x="1" y="4" width="14" height="2" rx="1" />
-      <rect x="3" y="7.5" width="10" height="2" rx="1" />
-      <rect x="5" y="11" width="6" height="2" rx="1" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={{ display: 'block' }}>
+      <path d="M13.7 21.8c-.5.7-1.6.3-1.6-.6V13h8.2c1 0 1.6 1.2.9 2l-7.5 6.8z" opacity="0.6" />
+      <path d="M10.3 2.2c.5-.7 1.6-.3 1.6.6V11H3.7c-1 0-1.6-1.2-.9-2l7.5-6.8z" />
     </svg>
   );
 }
@@ -95,18 +82,6 @@ function PlusIcon({ size = 12 }: { size?: number }) {
   );
 }
 
-function ChromeIcon({ size = 15 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}>
-      <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <circle cx="8" cy="8" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <line x1="10.5" y1="8" x2="15" y2="8" stroke="currentColor" strokeWidth="1.2" />
-      <line x1="6.75" y1="5.67" x2="4.25" y2="1.5" stroke="currentColor" strokeWidth="1.2" />
-      <line x1="6.75" y1="10.33" x2="4.25" y2="14.5" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
 function GearIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
@@ -122,12 +97,10 @@ export const integrationIcons: Record<string, React.FC<{ size?: number }>> = {
   github: GitHubIcon,
   vercel: VercelIcon,
   sentry: SentryIcon,
-  posthog: PostHogIcon,
-  segment: SegmentIcon,
+  supabase: SupabaseIcon,
   openai: OpenAIIcon,
   anthropic: AnthropicIcon,
   datadog: DatadogIcon,
-  chrome: ChromeIcon,
 };
 
 function RefreshIcon({ size = 14, spinning = false }: { size?: number; spinning?: boolean }) {
@@ -214,15 +187,256 @@ function ClearErrorsButton() {
   );
 }
 
+function BellIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}>
+      <path d="M8 1.5a.5.5 0 0 0-.5.5v.54A4.5 4.5 0 0 0 3.5 7v3.5l-1 1.5h11l-1-1.5V7a4.5 4.5 0 0 0-4-4.46V2a.5.5 0 0 0-.5-.5zM6.5 13a1.5 1.5 0 0 0 3 0h-3z" />
+    </svg>
+  );
+}
+
+const kindColor: Record<string, string> = {
+  deploy: colors.healthy,
+  anomaly: colors.anomaly,
+  action: colors.info,
+  error: colors.incident,
+};
+
+const severityIcon: Record<string, string> = {
+  info: '',
+  warning: '',
+  critical: '',
+};
+
+function NotificationFeed({ onClose }: { onClose: () => void }) {
+  const notifications = useVitalsStore((s) => s.notifications);
+  const markNotificationRead = useVitalsStore((s) => s.markNotificationRead);
+  const markAllNotificationsRead = useVitalsStore((s) => s.markAllNotificationsRead);
+  const clearNotifications = useVitalsStore((s) => s.clearNotifications);
+  const setState = useVitalsStore((s) => s.setState);
+  const setActiveIntegration = useVitalsStore((s) => s.setActiveIntegration);
+  const feedRef = useRef<HTMLDivElement>(null);
+
+  // Close on click outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (feedRef.current && !feedRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [onClose]);
+
+  const sorted = [...notifications].reverse(); // newest first
+
+  return (
+    <div
+      ref={feedRef}
+      style={{
+        position: 'absolute',
+        top: 32,
+        right: 40,
+        width: 300,
+        maxHeight: 280,
+        background: '#1c1c1e',
+        border: `0.5px solid ${colors.divider}`,
+        borderRadius: 12,
+        overflow: 'hidden',
+        zIndex: 100,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+      }}
+    >
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '8px 12px',
+        borderBottom: `0.5px solid ${colors.divider}`,
+      }}>
+        <span style={{ fontSize: 12, color: colors.textPrimary, fontWeight: 600 }}>Notifications</span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {notifications.some((n) => !n.read) && (
+            <button
+              onClick={markAllNotificationsRead}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: colors.info,
+                fontSize: 10,
+                fontFamily: fonts.mono,
+                cursor: 'pointer',
+                padding: '2px 4px',
+              }}
+            >
+              mark all read
+            </button>
+          )}
+          {notifications.length > 0 && (
+            <button
+              onClick={clearNotifications}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: colors.textTertiary,
+                fontSize: 10,
+                fontFamily: fonts.mono,
+                cursor: 'pointer',
+                padding: '2px 4px',
+              }}
+            >
+              clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* List */}
+      <div style={{ overflowY: 'auto', maxHeight: 240 }}>
+        {sorted.length === 0 ? (
+          <div style={{
+            padding: '24px 12px',
+            textAlign: 'center',
+            fontSize: fontSize.labelSecondary,
+            color: colors.textTertiary,
+          }}>
+            no notifications yet
+          </div>
+        ) : (
+          sorted.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => {
+                markNotificationRead(n.id);
+                if (n.targetIntegration) setActiveIntegration(n.targetIntegration);
+                if (n.targetState) setState(n.targetState);
+                onClose();
+              }}
+              style={{
+                display: 'flex',
+                gap: 8,
+                padding: '8px 12px',
+                width: '100%',
+                background: n.read ? 'transparent' : 'rgba(255,255,255,0.03)',
+                border: 'none',
+                borderBottom: `0.5px solid ${colors.divider}`,
+                cursor: 'pointer',
+                textAlign: 'left',
+                alignItems: 'flex-start',
+              }}
+            >
+              {/* Severity dot */}
+              <div style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                backgroundColor: kindColor[n.kind] || colors.textTertiary,
+                flexShrink: 0,
+                marginTop: 4,
+                opacity: n.read ? 0.4 : 1,
+              }} />
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontSize: 11,
+                  color: n.read ? colors.textTertiary : colors.textPrimary,
+                  fontWeight: n.read ? 400 : 600,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}>
+                  {n.title}
+                </div>
+                <div style={{
+                  fontSize: 10,
+                  color: n.read ? 'rgba(255,255,255,0.2)' : colors.textSecondary,
+                  fontFamily: fonts.mono,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  marginTop: 1,
+                }}>
+                  {n.body.split('\n')[0]}
+                </div>
+              </div>
+
+              {/* Time + sources */}
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-end',
+                flexShrink: 0,
+                gap: 2,
+              }}>
+                <span style={{
+                  fontSize: 10,
+                  color: colors.textTertiary,
+                  fontFamily: fonts.mono,
+                  fontVariantNumeric: 'tabular-nums',
+                }}>
+                  {formatTimeAgo(n.timestamp)}
+                </span>
+                {!n.read && (
+                  <div style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: '50%',
+                    backgroundColor: colors.info,
+                  }} />
+                )}
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChevronIcon({ size = 8 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 8 8" fill="currentColor" style={{ display: 'block' }}>
+      <path d="M1.5 2.5L4 5.5L6.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function NotchHeader() {
   const state = useVitalsStore((s) => s.state);
   const setState = useVitalsStore((s) => s.setState);
   const connectors = useVitalsStore((s) => s.connectors);
   const activeIntegration = useVitalsStore((s) => s.activeIntegration);
   const setActiveIntegration = useVitalsStore((s) => s.setActiveIntegration);
+  const activeTab = useVitalsStore((s) => s.activeTab);
+  const setActiveTab = useVitalsStore((s) => s.setActiveTab);
+  const activeRepo = useVitalsStore((s) => s.activeRepo);
+  const setActiveRepo = useVitalsStore((s) => s.setActiveRepo);
   const serviceErrors = useVitalsStore((s) => s.serviceErrors);
+  const unreadCount = useVitalsStore((s) => s.unreadCount);
+  const [showFeed, setShowFeed] = useState(false);
+  const watchedRepos = useVitalsStore((s) => s.watchedRepos);
+  const [showRepoPicker, setShowRepoPicker] = useState(false);
+  const repoPickerRef = useRef<HTMLDivElement>(null);
+
+  // Close repo picker on click outside
+  useEffect(() => {
+    if (!showRepoPicker) return;
+    function handleClick(e: MouseEvent) {
+      if (repoPickerRef.current && !repoPickerRef.current.contains(e.target as Node)) {
+        setShowRepoPicker(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showRepoPicker]);
 
   const connectedIntegrations = connectors.filter((c) => c.connected);
+
+  // Hide header entirely when nothing is connected
+  if (connectedIntegrations.length === 0) {
+    return null;
+  }
 
   return (
     <>
@@ -311,56 +525,183 @@ export function NotchHeader() {
       </div>
 
       {/* Separator */}
-      <div
-        style={{
-          width: 1,
-          height: 14,
-          background: colors.divider,
-          margin: '0 8px',
-          flexShrink: 0,
-          borderRadius: 1,
-        }}
-      />
+      {(integrationTabs[activeIntegration] || []).length > 0 && (
+        <div style={{ width: 1, height: 14, background: colors.divider, margin: '0 6px', flexShrink: 0, borderRadius: 1 }} />
+      )}
 
-      {/* Nav tabs */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1 }}>
-        {(activeIntegration === 'chrome' ? chromeNavIds : defaultNavIds).map((id) => {
-          const active = state === id;
-          const labels = navLabels[activeIntegration] || navLabels.github;
+      {/* Per-integration tabs */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1 }}>
+        {(integrationTabs[activeIntegration] || []).map((tabId) => {
+          const tabs = integrationTabs[activeIntegration] || [];
+          const currentTab = activeTab || tabs[0] || '';
+          const isActive = currentTab === tabId;
           return (
             <button
-              key={id}
-              onClick={() => setState(id)}
+              key={tabId}
+              onClick={() => setActiveTab(tabId)}
               style={{
-                background: active ? 'rgba(255,255,255,0.08)' : 'none',
-                border: 'none',
-                borderRadius: 8,
-                padding: '4px 9px',
-                cursor: 'pointer',
-                color: active ? colors.textPrimary : colors.textTertiary,
-                fontSize: 12,
-                transition: 'color 0.2s, background 0.2s',
+                background: isActive ? 'rgba(255,255,255,0.08)' : 'none',
+                border: 'none', borderRadius: 8,
+                padding: '4px 9px', cursor: 'pointer',
+                color: isActive ? colors.textPrimary : colors.textTertiary,
+                fontSize: 12, transition: 'color 0.15s, background 0.15s',
               }}
             >
-              {labels[id]}
+              {tabId}
             </button>
           );
         })}
       </div>
 
+      {/* Repo picker — only for GitHub with multiple watched repos */}
+      {activeIntegration === 'github' && watchedRepos.length > 1 && (
+        <div style={{ position: 'relative', flexShrink: 0 }} ref={repoPickerRef}>
+          <button
+            onClick={() => setShowRepoPicker(!showRepoPicker)}
+            style={{
+              background: showRepoPicker ? 'rgba(255,255,255,0.08)' : 'none',
+              border: 'none',
+              borderRadius: 6,
+              padding: '3px 6px',
+              cursor: 'pointer',
+              color: activeRepo ? colors.textPrimary : colors.textTertiary,
+              fontSize: 11,
+              fontFamily: fonts.mono,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              transition: 'color 0.15s, background 0.15s',
+              maxWidth: 120,
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeRepo ? activeRepo.split('/').pop() : 'all repos'}
+            </span>
+            <ChevronIcon />
+          </button>
+
+          {showRepoPicker && (
+            <div style={{
+              position: 'absolute',
+              top: 28,
+              right: 0,
+              minWidth: 180,
+              maxHeight: 220,
+              overflowY: 'auto',
+              background: '#1c1c1e',
+              border: `0.5px solid ${colors.divider}`,
+              borderRadius: 10,
+              overflow: 'hidden',
+              zIndex: 100,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            }}>
+              <button
+                onClick={() => { setActiveRepo(''); setShowRepoPicker(false); }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '7px 12px',
+                  background: !activeRepo ? 'rgba(255,255,255,0.06)' : 'transparent',
+                  border: 'none',
+                  borderBottom: `0.5px solid ${colors.divider}`,
+                  color: !activeRepo ? colors.action : colors.textPrimary,
+                  fontSize: 11,
+                  fontFamily: fonts.mono,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                all repos
+              </button>
+              {watchedRepos.map((wr) => (
+                <button
+                  key={wr.fullName}
+                  onClick={() => { setActiveRepo(wr.fullName); setShowRepoPicker(false); }}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    padding: '7px 12px',
+                    background: activeRepo === wr.fullName ? 'rgba(255,255,255,0.06)' : 'transparent',
+                    border: 'none',
+                    borderBottom: `0.5px solid ${colors.divider}`,
+                    color: activeRepo === wr.fullName ? colors.action : colors.textPrimary,
+                    fontSize: 11,
+                    fontFamily: fonts.mono,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {wr.fullName}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Refresh */}
       <RefreshButton />
 
-      {/* Settings gear */}
+      {/* Notification bell */}
       <button
-        onClick={() => setState('settings')}
+        onClick={() => setShowFeed(!showFeed)}
         style={{
-          background: state === 'settings' ? 'rgba(255,255,255,0.08)' : 'none',
+          background: showFeed ? 'rgba(255,255,255,0.08)' : 'none',
           border: 'none',
           borderRadius: 8,
           padding: 5,
           cursor: 'pointer',
-          color: state === 'settings' ? colors.textPrimary : colors.textTertiary,
+          color: unreadCount > 0 ? colors.info : colors.textTertiary,
+          display: 'flex',
+          alignItems: 'center',
+          transition: 'color 0.2s, transform 0.2s ease',
+          flexShrink: 0,
+          position: 'relative',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.15)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+        title={unreadCount > 0 ? `${unreadCount} unread` : 'notifications'}
+      >
+        <BellIcon />
+        {unreadCount > 0 && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            minWidth: 12,
+            height: 12,
+            borderRadius: 6,
+            backgroundColor: colors.incident,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 8,
+            fontWeight: 700,
+            color: '#fff',
+            padding: '0 2px',
+            fontFamily: fonts.mono,
+          }}>
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </div>
+        )}
+      </button>
+
+      {/* Notification feed dropdown */}
+      {showFeed && <NotificationFeed onClose={() => setShowFeed(false)} />}
+
+      {/* Settings gear — opens separate window */}
+      <button
+        onClick={() => window.vitals.openSettings()}
+        style={{
+          background: 'none',
+          border: 'none',
+          borderRadius: 8,
+          padding: 5,
+          cursor: 'pointer',
+          color: colors.textTertiary,
           display: 'flex',
           alignItems: 'center',
           transition: 'color 0.2s, background 0.2s, transform 0.3s ease',

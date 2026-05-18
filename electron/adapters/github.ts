@@ -1,5 +1,5 @@
 import { shell } from 'electron';
-import { getToken, setToken, getGitHubOAuthConfig, setGitHubOAuthConfig, getWatchedRepos } from '../store';
+import { getToken, setToken, getGitHubOAuthConfig, setGitHubOAuthConfig, getWatchedRepos, MAX_WATCHED_REPOS } from '../store';
 import type { WatchedRepo } from '../store';
 import type { Adapter, Snapshot, Anomaly } from './types';
 
@@ -7,6 +7,14 @@ const API_BASE = 'https://api.github.com';
 const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const DEVICE_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const SCOPES = 'repo,read:org,notifications';
+
+// Time windows — only show data within these horizons
+const ACTIONS_MAX_AGE_MS = 24 * 60 * 60 * 1000;       // 24h
+const NOTIFICATIONS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function isWithin(dateStr: string, maxAgeMs: number): boolean {
+  return Date.now() - new Date(dateStr).getTime() <= maxAgeMs;
+}
 
 interface GitHubWorkflowRun {
   id: number;
@@ -30,10 +38,13 @@ export interface GitHubSnapshot {
       number: number;
       title: string;
       author: string;
+      isAuthor: boolean;
+      isReviewRequested: boolean;
       status: 'needs_review' | 'approved' | 'changes_requested' | 'draft';
       branch: string;
       baseBranch: string;
       repo: string;
+      repoFullName: string;
       updatedAt: string;
     }>;
   };
@@ -50,18 +61,19 @@ export interface GitHubSnapshot {
     }>;
     failingCount: number;
   };
-  commits: Array<{
-    sha: string;
-    fullSha: string;
-    message: string;
-    author: string;
-    branch: string;
-    repo: string;
-    repoFullName: string;
-    date: string;
-  }>;
   notifications: {
     unreadCount: number;
+    items: Array<{
+      id: string;
+      title: string;
+      reason: string;
+      type: string;
+      repo: string;
+      repoFullName: string;
+      url: string;
+      unread: boolean;
+      updatedAt: string;
+    }>;
   };
 }
 
@@ -69,6 +81,14 @@ let pollingInterval: ReturnType<typeof setTimeout> | null = null;
 let currentPollMs = 30_000;
 let consecutiveErrors = 0;
 let snapshotHistory: Snapshot[] = [];
+let _cachedLogin: string | null = null;
+
+async function getAuthenticatedLogin(token: string): Promise<string> {
+  if (_cachedLogin) return _cachedLogin;
+  const user = await githubFetch<{ login: string }>('/user', token);
+  _cachedLogin = user.login;
+  return _cachedLogin;
+}
 
 async function githubFetch<T>(endpoint: string, token: string): Promise<T> {
   const res = await fetch(`${API_BASE}${endpoint}`, {
@@ -124,9 +144,9 @@ async function getTargetRepos(token: string): Promise<WatchedRepo[]> {
     return watched;
   }
 
-  // Fallback: top 5 recently pushed repos (any type — includes org repos)
+  // Fallback: top N recently pushed repos (any type — includes org repos)
   const repos = await githubFetch<any[]>(
-    '/user/repos?sort=pushed&per_page=5&type=all',
+    `/user/repos?sort=pushed&per_page=${MAX_WATCHED_REPOS}&type=all`,
     token
   );
   console.log('[vitals] No watched repos, falling back to:', repos.map((r: any) => r.full_name).join(', '));
@@ -136,7 +156,7 @@ async function getTargetRepos(token: string): Promise<WatchedRepo[]> {
   }));
 }
 
-async function fetchPRs(token: string, targets: WatchedRepo[]): Promise<GitHubSnapshot['prs']> {
+async function fetchPRs(token: string, targets: WatchedRepo[], login: string): Promise<GitHubSnapshot['prs']> {
   const allPrs: any[] = [];
 
   for (const target of targets) {
@@ -145,7 +165,6 @@ async function fetchPRs(token: string, targets: WatchedRepo[]): Promise<GitHubSn
         `/repos/${target.fullName}/pulls?state=open&per_page=15`,
         token
       );
-      // Show all open PRs from watched repos (no branch filter on PRs)
       for (const pr of repoPrs) {
         pr._repoName = target.fullName.split('/')[1];
         pr._repoFullName = target.fullName;
@@ -156,20 +175,37 @@ async function fetchPRs(token: string, targets: WatchedRepo[]): Promise<GitHubSn
     }
   }
 
-  const items = allPrs.map((pr: any) => ({
-    number: pr.number,
-    title: pr.title,
-    author: pr.user.login,
-    status: pr.draft
-      ? ('draft' as const)
-      : pr.requested_reviewers?.length > 0
-        ? ('needs_review' as const)
-        : ('approved' as const),
-    branch: pr.head.ref,
-    baseBranch: pr.base.ref,
-    repo: pr._repoName || '',
-    updatedAt: pr.updated_at,
-  }));
+  const items = allPrs.map((pr: any) => {
+    const authorLogin = pr.user.login;
+    const isAuthor = authorLogin.toLowerCase() === login.toLowerCase();
+    const isReviewRequested = (pr.requested_reviewers || []).some(
+      (r: any) => r.login.toLowerCase() === login.toLowerCase()
+    );
+    return {
+      number: pr.number,
+      title: pr.title,
+      author: authorLogin,
+      isAuthor,
+      isReviewRequested,
+      status: pr.draft
+        ? ('draft' as const)
+        : pr.requested_reviewers?.length > 0
+          ? ('needs_review' as const)
+          : ('approved' as const),
+      branch: pr.head.ref,
+      baseBranch: pr.base.ref,
+      repo: pr._repoName || '',
+      repoFullName: pr._repoFullName || '',
+      updatedAt: pr.updated_at,
+    };
+  });
+
+  // Sort: review requests for me first, then my PRs, then others
+  items.sort((a, b) => {
+    const scoreA = a.isReviewRequested ? 0 : a.isAuthor ? 1 : 2;
+    const scoreB = b.isReviewRequested ? 0 : b.isAuthor ? 1 : 2;
+    return scoreA - scoreB;
+  });
 
   return {
     total: allPrs.length,
@@ -200,11 +236,13 @@ async function fetchActions(token: string, targets: WatchedRepo[]): Promise<GitH
     }
   }
 
-  allRuns.sort(
+  // Only keep runs from the last 24h
+  const withinWindow = allRuns.filter((r) => isWithin(r.updated_at, ACTIONS_MAX_AGE_MS));
+  withinWindow.sort(
     (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
   );
 
-  const recentRuns = allRuns.slice(0, 10).map((run) => ({
+  const recentRuns = withinWindow.slice(0, 10).map((run) => ({
     name: run.name,
     status: run.status,
     conclusion: run.conclusion,
@@ -222,49 +260,45 @@ async function fetchActions(token: string, targets: WatchedRepo[]): Promise<GitH
   };
 }
 
-async function fetchCommits(token: string, targets: WatchedRepo[]): Promise<GitHubSnapshot['commits']> {
-  const allCommits: GitHubSnapshot['commits'] = [];
-
-  for (const target of targets) {
-    const branchesToQuery = target.branches.length > 0 ? target.branches : [''];
-    for (const branch of branchesToQuery) {
-      try {
-        const branchParam = branch ? `&sha=${encodeURIComponent(branch)}` : '';
-        const commits = await githubFetch<any[]>(
-          `/repos/${target.fullName}/commits?per_page=5${branchParam}`,
-          token
-        );
-        for (const c of commits) {
-          allCommits.push({
-            sha: c.sha.slice(0, 7),
-            fullSha: c.sha,
-            message: c.commit.message.split('\n')[0],
-            author: c.commit.author?.name || c.author?.login || 'unknown',
-            branch: branch || target.branches[0] || 'main',
-            repo: target.fullName.split('/')[1],
-            repoFullName: target.fullName,
-            date: c.commit.author?.date || '',
-          });
-        }
-      } catch {
-        // skip
-      }
-    }
-  }
-
-  allCommits.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return allCommits.slice(0, 10);
-}
-
 async function fetchNotifications(
   token: string
 ): Promise<GitHubSnapshot['notifications']> {
   const notifications = await githubFetch<any[]>(
-    '/notifications?per_page=50',
+    '/notifications?per_page=30',
     token
   );
+
+  // Only keep notifications from the last 7 days
+  const recent = notifications.filter((n: any) => isWithin(n.updated_at || '', NOTIFICATIONS_MAX_AGE_MS));
+
+  const items = recent.map((n: any) => {
+    // Build a usable HTML URL from the API URL
+    const subjectUrl = n.subject?.url || '';
+    let htmlUrl = '';
+    if (subjectUrl) {
+      // Convert API URL to HTML URL: /repos/owner/repo/pulls/123 -> /owner/repo/pull/123
+      htmlUrl = subjectUrl
+        .replace('https://api.github.com/repos/', 'https://github.com/')
+        .replace('/pulls/', '/pull/')
+        .replace('/issues/', '/issues/');
+    }
+
+    return {
+      id: n.id,
+      title: n.subject?.title || '',
+      reason: n.reason || 'subscribed',
+      type: n.subject?.type || 'Unknown',
+      repo: n.repository?.name || '',
+      repoFullName: n.repository?.full_name || '',
+      url: htmlUrl,
+      unread: n.unread,
+      updatedAt: n.updated_at || '',
+    };
+  });
+
   return {
-    unreadCount: notifications.filter((n: any) => n.unread).length,
+    unreadCount: items.filter((n) => n.unread).length,
+    items: items.slice(0, 15),
   };
 }
 
@@ -382,6 +416,7 @@ export function onDeviceFlowSuccess(cb: () => void): void {
 export async function setPersonalToken(token: string): Promise<void> {
   await setToken('github', token);
   _cachedToken = token;
+  _cachedLogin = null; // re-fetch on next snapshot
 }
 
 // --- Adapter ---
@@ -398,21 +433,23 @@ export const githubAdapter: Adapter = {
     if (!token) throw new Error('GitHub not configured');
     _cachedToken = token;
 
-    const targets = await getTargetRepos(token);
+    const [login, targets] = await Promise.all([
+      getAuthenticatedLogin(token),
+      getTargetRepos(token),
+    ]);
 
-    const [prs, actions, commits, notifications] = await Promise.all([
-      fetchPRs(token, targets),
+    const [prs, actions, notifications] = await Promise.all([
+      fetchPRs(token, targets, login),
       fetchActions(token, targets),
-      fetchCommits(token, targets),
       fetchNotifications(token),
     ]);
 
-    console.log('[vitals] Fetched — PRs:', prs.total, 'Actions:', actions.recentRuns.length, 'Commits:', commits.length);
+    console.log('[vitals] Fetched — PRs:', prs.total, 'Actions:', actions.recentRuns.length, 'Notifications:', notifications.items.length);
 
     const snapshot: Snapshot = {
       source: 'github',
       timestamp: Date.now(),
-      data: { prs, actions, commits, notifications } as unknown as Record<string, any>,
+      data: { prs, actions, notifications } as unknown as Record<string, any>,
     };
 
     snapshotHistory.push(snapshot);

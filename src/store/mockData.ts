@@ -12,14 +12,11 @@ export const emptyHoverData: HoverData = {
   openai: null,
   anthropic: null,
   datadog: null,
-  posthog: null,
-  segment: null,
-  chrome: null,
+  supabase: null,
   github: {
     prs: [],
     actions: [],
-    commits: [],
-    notifications: 0,
+    notifications: [],
   },
 };
 
@@ -30,5 +27,5 @@ export const mockConnectors: ConnectorConfig[] = [
   { id: 'openai', name: 'openai', connected: false, icon: 'OA' },
   { id: 'anthropic', name: 'anthropic', connected: false, icon: 'An' },
   { id: 'datadog', name: 'datadog', connected: false, icon: 'DD' },
-  { id: 'chrome', name: 'chrome', connected: false, icon: 'Ch' },
+  { id: 'supabase', name: 'supabase', connected: false, icon: 'Sb' },
 ];

@@ -1,23 +1,16 @@
 // electron-store is ESM, use dynamic import
 let storeInstance: any = null;
 
+import { getSecureToken, setSecureToken, removeSecureToken, getAllSecureTokenStatus } from './secure-store';
+
 export interface WatchedRepo {
   fullName: string; // e.g. "owner/repo"
   branches: string[]; // e.g. ["main", "develop"]
 }
 
+type ServiceKey = 'github' | 'vercel' | 'sentry' | 'openai' | 'anthropic' | 'datadog' | 'supabase' | 'chrome';
+
 interface StoreSchema {
-  tokens: {
-    github?: string;
-    vercel?: string;
-    sentry?: string;
-    posthog?: string;
-    segment?: string;
-    openai?: string;
-    anthropic?: string;
-    datadog?: string;
-    chrome?: string;
-  };
   github?: {
     clientId?: string;
     clientSecret?: string;
@@ -33,7 +26,13 @@ interface StoreSchema {
     silenceWeekends: boolean;
     launchAtLogin: boolean;
     pollingIntervalSec: number;
-    restingMode: 'carousel' | 'vitals' | 'fixed';
+    restingMode: 'pulse' | 'glance';
+  };
+  license: {
+    key?: string;
+    instanceId?: string;
+    lastValidatedAt?: number;
+    machineId?: string;
   };
 }
 
@@ -44,10 +43,10 @@ async function getStore(): Promise<any> {
     name: 'vitals-config',
     encryptionKey: 'vitals-v1-local-encryption',
     defaults: {
-      tokens: {},
       watchedRepos: [],
       watchedVercelProjects: [],
       watchedSentryProjects: [],
+      license: {},
       preferences: {
         hotkey: 'CommandOrControl+Shift+N',
         smartSilence: false,
@@ -56,26 +55,24 @@ async function getStore(): Promise<any> {
         silenceWeekends: true,
         launchAtLogin: false,
         pollingIntervalSec: 30,
-        restingMode: 'carousel',
+        restingMode: 'pulse',
       },
     },
   });
   return storeInstance;
 }
 
-export async function getToken(service: keyof StoreSchema['tokens']): Promise<string | undefined> {
-  const store = await getStore();
-  return store.get(`tokens.${service}`) as string | undefined;
+// Token access now uses safeStorage (Keychain-backed)
+export async function getToken(service: ServiceKey): Promise<string | undefined> {
+  return getSecureToken(service);
 }
 
-export async function setToken(service: keyof StoreSchema['tokens'], token: string): Promise<void> {
-  const store = await getStore();
-  store.set(`tokens.${service}`, token);
+export async function setToken(service: ServiceKey, token: string): Promise<void> {
+  setSecureToken(service, token);
 }
 
-export async function removeToken(service: keyof StoreSchema['tokens']): Promise<void> {
-  const store = await getStore();
-  store.delete(`tokens.${service}`);
+export async function removeToken(service: ServiceKey): Promise<void> {
+  removeSecureToken(service);
 }
 
 export async function getGitHubOAuthConfig(): Promise<{ clientId?: string; clientSecret?: string }> {
@@ -89,19 +86,7 @@ export async function setGitHubOAuthConfig(clientId: string, clientSecret: strin
 }
 
 export async function getAllTokenStatus(): Promise<Record<string, boolean>> {
-  const store = await getStore();
-  const tokens = store.get('tokens') as StoreSchema['tokens'];
-  return {
-    github: !!tokens?.github,
-    vercel: !!tokens?.vercel,
-    sentry: !!tokens?.sentry,
-    posthog: !!tokens?.posthog,
-    segment: !!tokens?.segment,
-    openai: !!tokens?.openai,
-    anthropic: !!tokens?.anthropic,
-    datadog: !!tokens?.datadog,
-    chrome: !!tokens?.chrome,
-  };
+  return getAllSecureTokenStatus();
 }
 
 export async function getWatchedRepos(): Promise<WatchedRepo[]> {
@@ -109,9 +94,11 @@ export async function getWatchedRepos(): Promise<WatchedRepo[]> {
   return (store.get('watchedRepos') as WatchedRepo[]) || [];
 }
 
+export const MAX_WATCHED_REPOS = 5;
+
 export async function setWatchedRepos(repos: WatchedRepo[]): Promise<void> {
   const store = await getStore();
-  store.set('watchedRepos', repos);
+  store.set('watchedRepos', repos.slice(0, MAX_WATCHED_REPOS));
 }
 
 export async function getWatchedVercelProjects(): Promise<string[]> {
@@ -199,10 +186,29 @@ export function isInSilenceWindow(config: SmartSilenceConfig): boolean {
 
 export async function getRestingMode(): Promise<string> {
   const store = await getStore();
-  return (store.get('preferences.restingMode') as string) || 'carousel';
+  const raw = (store.get('preferences.restingMode') as string) || 'pulse';
+  // Migrate old values
+  if (raw === 'carousel' || raw === 'glance') return 'glance';
+  if (raw === 'vitals' || raw === 'fixed') return 'pulse';
+  return raw;
 }
 
 export async function setRestingMode(mode: string): Promise<void> {
   const store = await getStore();
   store.set('preferences.restingMode', mode);
+}
+
+export async function getLicense(): Promise<{ key?: string; instanceId?: string; lastValidatedAt?: number; machineId?: string }> {
+  const store = await getStore();
+  return (store.get('license') as StoreSchema['license']) || {};
+}
+
+export async function setLicense(data: { key?: string; instanceId?: string; lastValidatedAt?: number; machineId?: string }): Promise<void> {
+  const store = await getStore();
+  store.set('license', data);
+}
+
+export async function clearLicense(): Promise<void> {
+  const store = await getStore();
+  store.set('license', {});
 }

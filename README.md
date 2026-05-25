@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="build/icon.icns" width="128" height="128" alt="Vitals icon">
+  <img src="build/icon.png" width="128" height="128" alt="Vitals icon">
 </p>
 
 <h1 align="center">Vitals</h1>

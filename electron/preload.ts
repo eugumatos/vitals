@@ -55,6 +55,10 @@ contextBridge.exposeInMainWorld('vitals', {
     listProjects: () => ipcRenderer.invoke('vercel:list-projects'),
     getWatchedProjects: () => ipcRenderer.invoke('vercel:get-watched-projects'),
     setWatchedProjects: (projects: string[]) => ipcRenderer.invoke('vercel:set-watched-projects', projects),
+    redeploy: (deploymentId: string, projectName: string, target: string) => ipcRenderer.invoke('vercel:redeploy', deploymentId, projectName, target),
+    cancel: (deploymentId: string) => ipcRenderer.invoke('vercel:cancel', deploymentId),
+    rollback: (projectId: string, deploymentId: string) => ipcRenderer.invoke('vercel:rollback', projectId, deploymentId),
+    fetchLogs: (projectName?: string) => ipcRenderer.invoke('vercel:fetch-logs', projectName),
     onSnapshot: (callback: (snapshot: any) => void) => {
       ipcRenderer.on('vercel:snapshot', (_event, snapshot) => callback(snapshot));
     },
@@ -66,6 +70,11 @@ contextBridge.exposeInMainWorld('vitals', {
   // Sentry
   sentry: {
     setToken: (token: string) => ipcRenderer.invoke('sentry:set-token', token),
+    startOAuth: (clientId: string, clientSecret: string) => ipcRenderer.invoke('sentry:start-oauth', clientId, clientSecret),
+    cancelOAuth: () => ipcRenderer.invoke('sentry:cancel-oauth'),
+    onOAuthSuccess: (callback: () => void) => {
+      ipcRenderer.on('sentry:oauth-success', () => callback());
+    },
     disconnect: () => ipcRenderer.invoke('sentry:disconnect'),
     getSnapshot: () => ipcRenderer.invoke('sentry:get-snapshot'),
     listProjects: () => ipcRenderer.invoke('sentry:list-projects'),
@@ -95,6 +104,8 @@ contextBridge.exposeInMainWorld('vitals', {
   // Anthropic
   anthropic: {
     setToken: (token: string) => ipcRenderer.invoke('anthropic:set-token', token),
+    enableLocal: (plan?: string) => ipcRenderer.invoke('anthropic:enable-local', plan),
+    isLocalMode: () => ipcRenderer.invoke('anthropic:is-local-mode') as Promise<boolean>,
     disconnect: () => ipcRenderer.invoke('anthropic:disconnect'),
     getSnapshot: () => ipcRenderer.invoke('anthropic:get-snapshot'),
     onSnapshot: (callback: (snapshot: any) => void) => {
@@ -128,6 +139,13 @@ contextBridge.exposeInMainWorld('vitals', {
     },
     onError: (callback: (error: string) => void) => {
       ipcRenderer.on('datadog:error', (_event, error) => callback(error));
+    },
+  },
+
+  // System Monitor
+  system: {
+    onSnapshot: (callback: (snapshot: any) => void) => {
+      ipcRenderer.on('system:snapshot', (_event, snapshot) => callback(snapshot));
     },
   },
 
@@ -169,6 +187,10 @@ contextBridge.exposeInMainWorld('vitals', {
     ipcRenderer.on('watched-repos:changed', (_event, repos) => callback(repos));
   },
 
+  onWatchedVercelProjectsChanged: (callback: (projects: string[]) => void) => {
+    ipcRenderer.on('watched-vercel-projects:changed', (_event, projects) => callback(projects));
+  },
+
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
 
@@ -185,6 +207,8 @@ contextBridge.exposeInMainWorld('vitals', {
   getSmartSilence: () => ipcRenderer.invoke('preferences:get-smart-silence') as Promise<{ enabled: boolean; startHour: number; endHour: number; weekends: boolean }>,
   setSmartSilence: (config: { enabled: boolean; startHour: number; endHour: number; weekends: boolean }) => ipcRenderer.invoke('preferences:set-smart-silence', config),
   isSilenced: () => ipcRenderer.invoke('preferences:is-silenced') as Promise<boolean>,
+  getPerformanceMode: () => ipcRenderer.invoke('preferences:get-performance-mode') as Promise<string>,
+  setPerformanceMode: (mode: string) => ipcRenderer.invoke('preferences:set-performance-mode', mode),
 
   // Connectors status
   getConnectorStatus: () => ipcRenderer.invoke('connectors:status'),
@@ -209,6 +233,9 @@ contextBridge.exposeInMainWorld('vitals', {
       ipcRenderer.on('streaks:updated', (_event, data) => callback(data));
     },
   },
+
+  // Log path
+  getLogPath: () => ipcRenderer.invoke('app:log-path') as Promise<string>,
 
   // Quit app
   quit: () => ipcRenderer.invoke('app:quit'),

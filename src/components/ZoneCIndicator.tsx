@@ -381,6 +381,15 @@ function extractActivitySlides(
         slides.push({ id, color: colors.textSecondary, label: `${snap.data.projects.length} projects` });
         break;
       }
+      case 'system': {
+        const snap = hoverData.system;
+        if (!snap?.data) break;
+        const cpu = snap.data.cpu?.usage ?? 0;
+        const mem = snap.data.memory?.usagePercent ?? 0;
+        const cpuColor = cpu >= 90 ? colors.incident : cpu >= 70 ? colors.anomaly : colors.healthy;
+        slides.push({ id, color: cpuColor, label: `cpu ${cpu}%  ram ${mem}%` });
+        break;
+      }
     }
   }
 
@@ -483,6 +492,18 @@ function extractHealthSlides(hoverData: HoverData, connectedIds: string[]): Wing
         }
         break;
       }
+      case 'system': {
+        const snap = hoverData.system;
+        if (!snap?.data) break;
+        const cpu = snap.data.cpu?.usage ?? 0;
+        const mem = snap.data.memory?.usagePercent ?? 0;
+        if (cpu >= 90 || mem >= 90) {
+          slides.push({ id, color: colors.incident, label: cpu >= mem ? `cpu ${cpu}%` : `ram ${mem}%` });
+        } else if (cpu >= 70 || mem >= 70) {
+          slides.push({ id, color: colors.anomaly, label: cpu >= mem ? `cpu ${cpu}%` : `ram ${mem}%` });
+        }
+        break;
+      }
     }
   }
 
@@ -550,6 +571,16 @@ function extractCompanionSlides(
         const { healthy, unhealthy } = snap.data.stats;
         if (unhealthy > 0) return { id: slide.id, color: colors.incident, label: `${unhealthy} unhealthy` };
         return { id: slide.id, color: colors.healthy, label: `${healthy} healthy` };
+      }
+      case 'system': {
+        const snap = hoverData.system;
+        if (!snap?.data) return { id: slide.id, color: slide.color, label: '' };
+        const mem = snap.data.memory;
+        if (!mem) return { id: slide.id, color: slide.color, label: '' };
+        const usedGb = (mem.used / (1024 * 1024 * 1024)).toFixed(1);
+        const totalGb = (mem.total / (1024 * 1024 * 1024)).toFixed(0);
+        const memColor = mem.usagePercent >= 90 ? colors.incident : mem.usagePercent >= 70 ? colors.anomaly : colors.healthy;
+        return { id: slide.id, color: memColor, label: `${usedGb}/${totalGb}GB` };
       }
       default:
         return { id: slide.id, color: slide.color, label: '' };

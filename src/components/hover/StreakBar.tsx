@@ -82,87 +82,72 @@ export function StreakBar() {
   const isRecord = currentStreak >= longestStreak && currentStreak > 1;
   const atRisk = !isActiveToday && currentStreak > 0;
 
+  // Compose right-side text
+  const rightText = isRecord && currentStreak > 2
+    ? 'new record!'
+    : atRisk
+      ? 'ship today to keep it'
+      : longestStreak > currentStreak
+        ? `best ${longestStreak >= 365 ? '365+' : longestStreak}d`
+        : '';
+
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
-        padding: `6px ${spacing.panelPaddingX}px`,
+        padding: `5px ${spacing.panelPaddingX}px`,
         borderBottom: `0.5px solid ${colors.divider}`,
-        minHeight: 28,
+        minHeight: 26,
       }}
     >
-      {/* Flame + streak count */}
+      {/* Left: flame + "3d streak · 2 today" */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 4,
+          gap: 5,
           animation: atRisk ? 'vitals-streak-at-risk 3s ease-in-out infinite' : undefined,
         }}
       >
         <FlameIcon
-          size={14}
+          size={13}
           color={isRecord ? '#fbbf24' : isActiveToday ? colors.healthy : colors.textTertiary}
           glow={isActiveToday}
           shimmer={isRecord}
         />
-        <StreakNumber value={currentStreak} isRecord={isRecord} />
+        <span style={{
+          fontSize: fontSize.body, fontFamily: fonts.mono, fontWeight: 600,
+          color: isRecord ? '#fbbf24' : colors.textPrimary,
+          fontVariantNumeric: 'tabular-nums',
+          animation: isRecord ? 'vitals-streak-number-glow 3s ease-in-out infinite' : undefined,
+        }}>
+          {currentStreak >= 365 ? '365+' : currentStreak}d
+        </span>
+        <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>
+          streak
+        </span>
+        <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, margin: '0 1px' }}>·</span>
+        <span style={{ fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono }}>
+          {todayCount} today
+        </span>
       </div>
 
-      {/* Label */}
-      <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>
-        {currentStreak === 1 ? 'day' : 'days'}
-      </span>
-
-      {/* Separator */}
-      <div style={{ width: 1, height: 12, backgroundColor: colors.divider, flexShrink: 0 }} />
-
-      {/* Today count */}
-      <span style={{ fontSize: fontSize.labelSecondary, color: colors.textSecondary, fontFamily: fonts.mono }}>
-        {todayCount} today
-      </span>
-
-      {/* Longest streak (only show if different from current) */}
-      {longestStreak > currentStreak && (
-        <>
-          <div style={{ width: 1, height: 12, backgroundColor: colors.divider, flexShrink: 0 }} />
-          <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary, fontFamily: fonts.mono }}>
-            best {longestStreak >= 365 ? '365+' : longestStreak}
-          </span>
-        </>
-      )}
-
-      {/* Record badge */}
-      {isRecord && currentStreak > 2 && (
-        <span
-          style={{
-            marginLeft: 'auto',
-            fontSize: 10,
-            color: '#fbbf24',
-            background: 'rgba(251, 191, 36, 0.1)',
-            padding: '1px 6px',
-            borderRadius: 4,
-            fontWeight: 500,
-            animation: 'vitals-streak-badge-in 0.5s ease both',
-          }}
-        >
-          new record
-        </span>
-      )}
-
-      {/* At risk indicator */}
-      {atRisk && (
-        <span
-          style={{
-            marginLeft: 'auto',
-            fontSize: 10,
-            color: colors.textTertiary,
-            fontStyle: 'italic',
-          }}
-        >
-          keep it going
+      {/* Right: contextual label */}
+      {rightText && (
+        <span style={{
+          marginLeft: 'auto',
+          fontSize: 10,
+          fontFamily: fonts.mono,
+          color: isRecord ? '#fbbf24' : atRisk ? colors.textTertiary : colors.textTertiary,
+          fontStyle: atRisk ? 'italic' : 'normal',
+          background: isRecord ? 'rgba(251, 191, 36, 0.1)' : 'none',
+          padding: isRecord ? '1px 6px' : 0,
+          borderRadius: 4,
+          fontWeight: isRecord ? 500 : 400,
+          animation: isRecord ? 'vitals-streak-badge-in 0.5s ease both' : undefined,
+        }}>
+          {rightText}
         </span>
       )}
 

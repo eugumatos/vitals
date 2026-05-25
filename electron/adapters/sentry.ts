@@ -1,7 +1,14 @@
+import { createServer, type Server } from 'http';
+import { randomBytes, createHash } from 'crypto';
+import { shell } from 'electron';
 import { getToken, setToken, getWatchedSentryProjects } from '../store';
 import type { Adapter, Snapshot, Anomaly } from './types';
 
 const API_BASE = 'https://sentry.io/api/0';
+const AUTH_URL = 'https://sentry.io/oauth/authorize/';
+const TOKEN_URL = 'https://sentry.io/oauth/token/';
+const CALLBACK_PORT = 18321;
+const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}/callback`;
 
 export interface SentryIssue {
   id: string;
@@ -240,4 +247,141 @@ export async function listSentryProjects(): Promise<Array<{ slug: string; name: 
 
 export function getSnapshotHistory(): Snapshot[] {
   return snapshotHistory;
+}
+
+// --- OAuth2 Authorization Code + PKCE ---
+
+function generateCodeVerifier(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function generateCodeChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+
+let _oauthServer: Server | null = null;
+let _oauthResolve: ((token: string) => void) | null = null;
+let _oauthReject: ((err: Error) => void) | null = null;
+
+export async function startOAuthFlow(clientId: string, clientSecret: string): Promise<string> {
+  stopOAuthServer();
+
+  const codeVerifier = generateCodeVerifier();
+  const state = randomBytes(16).toString('hex');
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+
+  return new Promise<string>((resolve, reject) => {
+    _oauthResolve = resolve;
+    _oauthReject = reject;
+
+    _oauthServer = createServer(async (req, res) => {
+      const url = new URL(req.url || '', `http://localhost:${CALLBACK_PORT}`);
+
+      if (url.pathname !== '/callback') {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      const code = url.searchParams.get('code');
+      const returnedState = url.searchParams.get('state');
+      const error = url.searchParams.get('error');
+
+      if (error) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:system-ui;text-align:center;padding:60px;background:#000;color:#fff"><h2>authorization denied</h2><p>you can close this tab</p></body></html>');
+        stopOAuthServer();
+        reject(new Error(error));
+        return;
+      }
+
+      if (!code || returnedState !== state) {
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:system-ui;text-align:center;padding:60px;background:#000;color:#fff"><h2>invalid callback</h2></body></html>');
+        stopOAuthServer();
+        reject(new Error('invalid state or missing code'));
+        return;
+      }
+
+      try {
+        const tokenRes = await fetch(TOKEN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+            code_verifier: codeVerifier,
+            redirect_uri: REDIRECT_URI,
+          }),
+        });
+
+        const tokenData = await tokenRes.json() as any;
+
+        if (tokenData.access_token) {
+          await setToken('sentry', tokenData.access_token);
+          _cachedToken = tokenData.access_token;
+          _orgSlug = null; // reset so it re-resolves with new token
+
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body style="font-family:system-ui;text-align:center;padding:60px;background:#000;color:#34d399"><h2>connected to sentry</h2><p style="color:#999">you can close this tab</p></body></html>');
+          stopOAuthServer();
+          resolve(tokenData.access_token);
+        } else {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body style="font-family:system-ui;text-align:center;padding:60px;background:#000;color:#ef4444"><h2>token exchange failed</h2><p style="color:#999">' + (tokenData.error_description || tokenData.error || 'unknown error') + '</p></body></html>');
+          stopOAuthServer();
+          reject(new Error(tokenData.error_description || tokenData.error || 'token exchange failed'));
+        }
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'text/html' });
+        res.end('<html><body style="font-family:system-ui;text-align:center;padding:60px;background:#000;color:#ef4444"><h2>error</h2></body></html>');
+        stopOAuthServer();
+        reject(err);
+      }
+    });
+
+    _oauthServer.listen(CALLBACK_PORT, () => {
+      const params = new URLSearchParams({
+        client_id: clientId,
+        response_type: 'code',
+        scope: 'org:read project:read event:read',
+        redirect_uri: REDIRECT_URI,
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+      });
+
+      shell.openExternal(`${AUTH_URL}?${params.toString()}`);
+    });
+
+    _oauthServer.on('error', (err) => {
+      reject(err);
+    });
+
+    // Timeout after 5 minutes
+    setTimeout(() => {
+      if (_oauthServer) {
+        stopOAuthServer();
+        reject(new Error('OAuth flow timed out'));
+      }
+    }, 5 * 60 * 1000);
+  });
+}
+
+export function cancelOAuthFlow(): void {
+  stopOAuthServer();
+  if (_oauthReject) {
+    _oauthReject(new Error('cancelled'));
+    _oauthReject = null;
+  }
+}
+
+function stopOAuthServer(): void {
+  if (_oauthServer) {
+    _oauthServer.close();
+    _oauthServer = null;
+  }
+  _oauthResolve = null;
 }

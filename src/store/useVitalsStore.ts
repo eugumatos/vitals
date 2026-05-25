@@ -36,7 +36,10 @@ interface VitalsStore {
   activeTab: string;
   activeRepo: string;
   watchedRepos: Array<{ fullName: string; branches: string[] }>;
+  watchedVercelProjects: string[];
+  activeVercelProject: string;
   serviceErrors: Record<string, string | null>;
+  polledServices: Set<string>;
   connectorsLoaded: boolean;
   restingMode: 'pulse' | 'glance';
   isSilenced: boolean;
@@ -51,6 +54,8 @@ interface VitalsStore {
   setActiveTab: (tab: string) => void;
   setActiveRepo: (repo: string) => void;
   setWatchedRepos: (repos: Array<{ fullName: string; branches: string[] }>) => void;
+  setWatchedVercelProjects: (projects: string[]) => void;
+  setActiveVercelProject: (project: string) => void;
   setHover: () => void;
   setResting: () => void;
   updateGitHubSnapshot: (data: any) => void;
@@ -90,7 +95,10 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
   activeTab: '',
   activeRepo: '',
   watchedRepos: [],
+  watchedVercelProjects: [],
+  activeVercelProject: '',
   serviceErrors: {},
+  polledServices: new Set<string>(),
   connectorsLoaded: false,
   restingMode: 'pulse',
   isSilenced: false,
@@ -117,6 +125,14 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
     set({ watchedRepos: repos });
   },
 
+  setWatchedVercelProjects: (projects: string[]) => {
+    set({ watchedVercelProjects: projects });
+  },
+
+  setActiveVercelProject: (project: string) => {
+    set({ activeVercelProject: project });
+  },
+
   setState: (newState: VitalsState) => {
     const current = get().state;
     set({ state: newState, previousState: current });
@@ -132,7 +148,8 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
     const hasData = (hd.github.prs.length + hd.github.actions.length + hd.github.notifications.length) > 0
       || hd.vercel != null || hd.sentry != null || hd.openai != null
       || hd.anthropic != null || hd.datadog != null
-      || hd.supabase != null;
+      || hd.supabase != null
+      || hd.system != null;
 
     // Only show onboarding if connectors have been loaded and none are connected
     if (get().connectorsLoaded && !hasAnyConnected && !hasData) {
@@ -218,6 +235,8 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
       finalRestingDeploy = emptyDeploy;
     }
 
+    const polled = new Set(get().polledServices);
+    polled.add('github');
     set({
       hoverData: {
         ...current,
@@ -229,15 +248,19 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
       },
       restingDeploy: finalRestingDeploy,
       lastPolledAt: new Date(),
+      polledServices: polled,
     });
   },
 
   updateVercelSnapshot: (data: any) => {
     if (!data) return;
     const current = get().hoverData;
+    const polled = new Set(get().polledServices);
+    polled.add('vercel');
     set({
       hoverData: { ...current, vercel: data },
       lastPolledAt: new Date(),
+      polledServices: polled,
     });
   },
 
@@ -251,23 +274,29 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
       ? { value: stats.totalErrors24h > 1000 ? `${(stats.totalErrors24h / 1000).toFixed(1)}k` : String(stats.totalErrors24h), trend: 'stable' as const }
       : get().hoverData.errorRate;
 
+    const polled = new Set(get().polledServices);
+    polled.add('sentry');
     set({
       hoverData: { ...current, sentry: data, errorRate },
       lastPolledAt: new Date(),
+      polledServices: polled,
     });
   },
 
   updateServiceSnapshot: (service: string, data: any) => {
     if (!data) return;
     const current = get().hoverData;
-    const validServices = ['openai', 'anthropic', 'datadog', 'supabase'] as const;
+    const validServices = ['openai', 'anthropic', 'datadog', 'supabase', 'system'] as const;
     if (!validServices.includes(service as any)) return;
+    const polled = new Set(get().polledServices);
+    polled.add(service);
     set({
       hoverData: {
         ...current,
         [service]: { data, timestamp: new Date().toISOString() },
       },
       lastPolledAt: new Date(),
+      polledServices: polled,
       serviceErrors: { ...get().serviceErrors, [service]: null },
     });
   },
@@ -312,7 +341,9 @@ export const useVitalsStore = create<VitalsStore>((set, get) => ({
 
   clearServiceData: (service: string) => {
     const current = get().hoverData;
-    const update: Record<string, any> = {};
+    const polled = new Set(get().polledServices);
+    polled.delete(service);
+    const update: Record<string, any> = { polledServices: polled };
     if (service === 'github') {
       update.hoverData = { ...current, github: { prs: [], actions: [], notifications: [] } };
       update.restingDeploy = { sha: '', time: '', status: 'success', repo: '', fullSha: '' };

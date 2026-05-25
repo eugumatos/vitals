@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { Notch } from './components/Notch';
 import { useVitalsStore } from './store/useVitalsStore';
 import { useGeometryStore } from './store/useGeometryStore';
@@ -20,6 +20,9 @@ declare global {
         listProjects: () => Promise<{ success: boolean; data?: Array<{ id: string; name: string }>; error?: string }>;
         getWatchedProjects: () => Promise<string[]>;
         setWatchedProjects: (projects: string[]) => Promise<{ success: boolean }>;
+        redeploy: (deploymentId: string, projectName: string, target: string) => Promise<{ success: boolean; data?: { uid: string }; error?: string }>;
+        cancel: (deploymentId: string) => Promise<{ success: boolean; error?: string }>;
+        rollback: (projectId: string, deploymentId: string) => Promise<{ success: boolean; error?: string }>;
         setBoost: (enabled: boolean) => Promise<{ success: boolean }>;
         onSnapshot: (callback: (snapshot: any) => void) => void;
         onError: (callback: (error: string) => void) => void;
@@ -62,11 +65,15 @@ declare global {
         onSnapshot: (callback: (snapshot: any) => void) => void;
         onError: (callback: (error: string) => void) => void;
       };
+      system: {
+        onSnapshot: (callback: (snapshot: any) => void) => void;
+      };
       onDeployCompleted: (callback: (data: { title: string; body: string; success: boolean }) => void) => void;
       onPreferencesChanged: (callback: (changes: Record<string, any>) => void) => void;
       onDataClear: (callback: (service: string) => void) => void;
       onConnectorsChanged: (callback: (status: Record<string, boolean>) => void) => void;
       onWatchedReposChanged: (callback: (repos: Array<{ fullName: string; branches: string[] }>) => void) => void;
+      onWatchedVercelProjectsChanged: (callback: (projects: string[]) => void) => void;
       onAnomalyDetected: (callback: (event: any) => void) => void;
       onNotificationPush: (callback: (notification: any) => void) => void;
       onNotificationNavigate: (callback: (data: { integration?: string; state?: string; notificationId: string }) => void) => void;
@@ -170,7 +177,12 @@ export default function App() {
       setServiceError('sentry', error);
     });
 
-    // Subscribe to the 5 remaining services
+    // System monitor — always active, no token
+    window.vitals.system?.onSnapshot((snapshot: any) => {
+      updateServiceSnapshot('system', snapshot.data);
+    });
+
+    // Subscribe to the remaining services
     const services = ['openai', 'anthropic', 'datadog', 'supabase'] as const;
     for (const service of services) {
       window.vitals[service]?.onSnapshot((snapshot: any) => {
@@ -213,6 +225,11 @@ export default function App() {
       if (status.github) {
         window.vitals.github.getWatchedRepos().then((repos) => {
           useVitalsStore.getState().setWatchedRepos(repos);
+        });
+      }
+      if (status.vercel) {
+        window.vitals.vercel.getWatchedProjects().then((projects) => {
+          useVitalsStore.getState().setWatchedVercelProjects(projects);
         });
       }
     });
@@ -258,6 +275,19 @@ export default function App() {
       useVitalsStore.getState().setWatchedRepos(repos);
     });
 
+    // Load watched Vercel projects for the project picker
+    window.vitals.vercel.getWatchedProjects().then((projects) => {
+      useVitalsStore.getState().setWatchedVercelProjects(projects);
+    });
+
+    window.vitals.onWatchedVercelProjectsChanged((projects) => {
+      const store = useVitalsStore.getState();
+      store.setWatchedVercelProjects(projects);
+      if (store.activeVercelProject && !projects.includes(store.activeVercelProject)) {
+        store.setActiveVercelProject('');
+      }
+    });
+
     // Load initial preferences
     window.vitals.getRestingMode().then((mode) => {
       useVitalsStore.setState({ restingMode: mode as any });
@@ -275,11 +305,20 @@ export default function App() {
     });
   }, [setState, updateGitHubSnapshot, updateVercelSnapshot, updateSentrySnapshot, updateServiceSnapshot, setServiceError, updateConnectorStatus, clearServiceData, addAnomaly, pushNotification, markNotificationRead, setActiveIntegration]);
 
+  // Throttle setIgnoreMouseEvents — max 1 call per 100ms
+  const lastMouseEventRef = useRef(0);
+
   const handleMouseEnter = useCallback(() => {
+    const now = Date.now();
+    if (now - lastMouseEventRef.current < 100) return;
+    lastMouseEventRef.current = now;
     window.vitals.setIgnoreMouseEvents(false);
   }, []);
 
   const handleMouseLeave = useCallback(() => {
+    const now = Date.now();
+    if (now - lastMouseEventRef.current < 100) return;
+    lastMouseEventRef.current = now;
     window.vitals.setIgnoreMouseEvents(true);
   }, []);
 

@@ -179,9 +179,9 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
 const TOKEN_URLS: Record<string, { label: string; url: string; hint: string; placeholder: string }> = {
   github: { label: 'github.com/settings/developers', url: 'https://github.com/settings/developers', hint: 'Create a GitHub OAuth App, then paste the Client ID.', placeholder: 'Ov23li...' },
   vercel: { label: 'vercel.com/account/tokens', url: 'https://vercel.com/account/tokens', hint: 'Create an access token.', placeholder: 'token...' },
-  sentry: { label: 'sentry.io/settings/auth-tokens', url: 'https://sentry.io/settings/auth-tokens/', hint: 'Create an auth token.', placeholder: 'sntrys_...' },
+  sentry: { label: 'sentry.io/settings/developer-settings', url: 'https://sentry.io/settings/account/api/applications/', hint: 'Create an OAuth Application, then paste Client ID and Client Secret.', placeholder: 'Client ID' },
   openai: { label: 'platform.openai.com/api-keys', url: 'https://platform.openai.com/api-keys', hint: 'Create an admin API key.', placeholder: 'sk-admin-...' },
-  anthropic: { label: 'console.anthropic.com/settings/keys', url: 'https://console.anthropic.com/settings/keys', hint: 'Create an admin API key (sk-ant-admin-...).', placeholder: 'sk-ant-admin-...' },
+  anthropic: { label: 'console.anthropic.com/settings/admin-keys', url: 'https://console.anthropic.com/settings/admin-keys', hint: 'Or use an Admin Key for org-wide usage.', placeholder: 'sk-ant-admin-...' },
   datadog: { label: 'app.datadoghq.com/api-keys', url: 'https://app.datadoghq.com/organization-settings/api-keys', hint: 'Get API key + App key.', placeholder: 'api_key:app_key' },
   supabase: { label: 'supabase.com/dashboard/account/tokens', url: 'https://supabase.com/dashboard/account/tokens', hint: 'Create an access token.', placeholder: 'sbp_...' },
 };
@@ -208,7 +208,7 @@ const INTEGRATION_INFO: Record<string, IntegrationInfo> = {
   sentry: {
     tagline: 'Error tracking & issue monitoring',
     features: ['Unresolved issues with severity', 'Error rate trends (24h)', 'New issue alerts in real-time'],
-    steps: ['Go to sentry.io/settings/auth-tokens', 'Create a token with project:read scope', 'Paste it above'],
+    steps: ['Go to sentry.io → Settings → Developer Settings → OAuth Applications', 'Create an app with redirect URI: http://localhost:18321/callback', 'Paste Client ID and Client Secret above, then authorize'],
   },
   openai: {
     tagline: 'API usage, costs & model breakdown',
@@ -216,9 +216,9 @@ const INTEGRATION_INFO: Record<string, IntegrationInfo> = {
     steps: ['Go to platform.openai.com/api-keys', 'Create an admin-level API key', 'Paste it above'],
   },
   anthropic: {
-    tagline: 'Claude API usage & spend tracking',
-    features: ['Request volume & token counts', 'Cost per model (Opus, Sonnet, Haiku)', 'Billing period summary'],
-    steps: ['Go to console.anthropic.com/settings/keys', 'Create an admin key (sk-ant-admin-...)', 'Paste it above'],
+    tagline: 'Claude Code usage, tokens & cost tracking',
+    features: ['Session history with token counts', 'Cost per model (Opus, Sonnet, Haiku)', 'Auto-detects Claude Code — no key needed'],
+    steps: ['Click "Detect Claude Code" to connect instantly', 'Or use an Admin Key for org-wide usage data', 'Works with Max, Pro, and API plans'],
   },
   datadog: {
     tagline: 'Monitor alerts & infrastructure health',
@@ -525,6 +525,16 @@ function IntegrationDetail({ id, connected, onConnect, onDisconnect }: {
   const [verifying, setVerifying] = useState(false);
   const info = TOKEN_URLS[id];
 
+  // Sentry OAuth state
+  const [sentryClientId, setSentryClientId] = useState('');
+  const [sentryClientSecret, setSentryClientSecret] = useState('');
+  const [sentryOAuthLoading, setSentryOAuthLoading] = useState(false);
+
+  // Anthropic local mode state
+  const [anthropicMode, setAnthropicMode] = useState<'choose' | 'admin'>('choose');
+  const [anthropicLocalLoading, setAnthropicLocalLoading] = useState(false);
+  const [anthropicPlan, setAnthropicPlan] = useState<string>('max');
+
   // GitHub device flow state
   const { deviceFlow, setDeviceFlow, resetDeviceFlow, setConnectorConnected } = useVitalsStore();
 
@@ -533,6 +543,16 @@ function IntegrationDetail({ id, connected, onConnect, onDisconnect }: {
       window.vitals.github.onDeviceFlowSuccess(() => {
         setConnectorConnected('github', true);
         resetDeviceFlow();
+        setJustConnected(true);
+        setTimeout(() => setJustConnected(false), 2000);
+      });
+    }
+    if (id === 'sentry') {
+      window.vitals.sentry.onOAuthSuccess(() => {
+        setConnectorConnected('sentry', true);
+        setSentryOAuthLoading(false);
+        setSentryClientId('');
+        setSentryClientSecret('');
         setJustConnected(true);
         setTimeout(() => setJustConnected(false), 2000);
       });
@@ -551,6 +571,24 @@ function IntegrationDetail({ id, connected, onConnect, onDisconnect }: {
       setTimeout(() => setJustConnected(false), 2000);
     } else {
       setError('Failed to connect. Check your token.');
+    }
+  };
+
+  const handleSentryOAuth = async () => {
+    if (!sentryClientId.trim() || !sentryClientSecret.trim()) return;
+    setSentryOAuthLoading(true);
+    setError(null);
+    const result = await window.vitals.sentry.startOAuth(sentryClientId.trim(), sentryClientSecret.trim());
+    if (result.success) {
+      setConnectorConnected('sentry', true);
+      setSentryOAuthLoading(false);
+      setSentryClientId('');
+      setSentryClientSecret('');
+      setJustConnected(true);
+      setTimeout(() => setJustConnected(false), 2000);
+    } else {
+      setError(result.error || 'OAuth flow failed');
+      setSentryOAuthLoading(false);
     }
   };
 
@@ -719,6 +757,145 @@ function IntegrationDetail({ id, connected, onConnect, onDisconnect }: {
                 <div style={{ fontSize: 12, color: s.danger, marginTop: 8 }}>{deviceFlow.error}</div>
               )}
             </>
+          ) : id === 'sentry' ? (
+            // Sentry OAuth flow
+            <>
+              <div style={{ fontSize: 12, color: s.textSecondary, marginBottom: 10, lineHeight: 1.5 }}>
+                {info?.hint}{' '}
+                {info?.url && (
+                  <span
+                    onClick={() => window.vitals.openExternal(info.url)}
+                    style={{ color: s.blue, cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    {info.label}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input
+                  value={sentryClientId}
+                  onChange={(e) => setSentryClientId(e.target.value)}
+                  placeholder="Client ID"
+                  style={inputStyle}
+                  autoFocus
+                />
+                <input
+                  value={sentryClientSecret}
+                  onChange={(e) => setSentryClientSecret(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSentryOAuth()}
+                  placeholder="Client Secret"
+                  type="password"
+                  style={inputStyle}
+                />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={handleSentryOAuth}
+                    disabled={sentryOAuthLoading || !sentryClientId.trim() || !sentryClientSecret.trim()}
+                    style={{ ...connectBtnStyle, opacity: (sentryOAuthLoading || !sentryClientId.trim() || !sentryClientSecret.trim()) ? 0.6 : 1 }}
+                  >
+                    {sentryOAuthLoading ? 'Waiting for authorization...' : 'Connect with Sentry'}
+                  </button>
+                  {sentryOAuthLoading && (
+                    <button onClick={() => { window.vitals.sentry.cancelOAuth(); setSentryOAuthLoading(false); }} style={ghostBtnStyle}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+              {error && <div style={{ fontSize: 12, color: s.danger, marginTop: 8 }}>{error}</div>}
+            </>
+          ) : id === 'anthropic' ? (
+            // Anthropic: local detect or admin key
+            <>
+              {anthropicMode === 'choose' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ fontSize: 12, color: s.textSecondary, lineHeight: 1.5 }}>
+                    Reads your local Claude Code usage data — no key required.
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12, color: s.textTertiary }}>Plan</span>
+                    {(['max', 'pro', 'api'] as const).map((plan) => (
+                      <button
+                        key={plan}
+                        onClick={() => setAnthropicPlan(plan)}
+                        style={{
+                          fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
+                          textTransform: 'uppercase', letterSpacing: '0.05em',
+                          border: `1px solid ${anthropicPlan === plan ? (plan === 'max' ? '#a78bfa' : plan === 'pro' ? '#60a5fa' : s.accent) : 'rgba(255,255,255,0.08)'}`,
+                          background: anthropicPlan === plan ? `${plan === 'max' ? '#a78bfa' : plan === 'pro' ? '#60a5fa' : s.accent}18` : 'transparent',
+                          color: anthropicPlan === plan ? (plan === 'max' ? '#a78bfa' : plan === 'pro' ? '#60a5fa' : s.accent) : s.textTertiary,
+                        }}
+                      >
+                        {plan}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setAnthropicLocalLoading(true);
+                      setError(null);
+                      const result = await window.vitals.anthropic.enableLocal(anthropicPlan);
+                      if (result.success) {
+                        setConnectorConnected('anthropic', true);
+                        setJustConnected(true);
+                        setTimeout(() => setJustConnected(false), 2000);
+                      } else {
+                        setError('Claude Code not found. Install it or use an Admin Key instead.');
+                      }
+                      setAnthropicLocalLoading(false);
+                    }}
+                    disabled={anthropicLocalLoading}
+                    style={{ ...connectBtnStyle, opacity: anthropicLocalLoading ? 0.6 : 1 }}
+                  >
+                    {anthropicLocalLoading ? 'Detecting...' : 'Detect Claude Code'}
+                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ flex: 1, height: 1, background: s.divider }} />
+                    <span style={{ fontSize: 11, color: s.textTertiary }}>or</span>
+                    <div style={{ flex: 1, height: 1, background: s.divider }} />
+                  </div>
+                  <button
+                    onClick={() => setAnthropicMode('admin')}
+                    style={ghostBtnStyle}
+                  >
+                    Use Admin Key (org-wide)
+                  </button>
+                  {error && <div style={{ fontSize: 12, color: s.danger, marginTop: 4 }}>{error}</div>}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: s.textSecondary, lineHeight: 1.5 }}>
+                    {info?.hint}{' '}
+                    {info?.url && (
+                      <span
+                        onClick={() => window.vitals.openExternal(info.url)}
+                        style={{ color: s.blue, cursor: 'pointer', textDecoration: 'underline' }}
+                      >
+                        {info.label}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+                      placeholder={info?.placeholder || 'sk-ant-admin-...'}
+                      type="password"
+                      style={inputStyle}
+                      autoFocus
+                    />
+                    <button onClick={handleSubmit} disabled={loading} style={{ ...connectBtnStyle, opacity: loading ? 0.6 : 1 }}>
+                      {loading ? 'Connecting...' : 'Connect'}
+                    </button>
+                  </div>
+                  <button onClick={() => setAnthropicMode('choose')} style={{ ...ghostBtnStyle, alignSelf: 'flex-start' }}>
+                    Back
+                  </button>
+                  {error && <div style={{ fontSize: 12, color: s.danger, marginTop: 4 }}>{error}</div>}
+                </div>
+              )}
+            </>
           ) : (
             // Token-based auth
             <>
@@ -759,7 +936,74 @@ function IntegrationDetail({ id, connected, onConnect, onDisconnect }: {
       {connected && id === 'github' && <GitHubWatchedRepos />}
       {connected && id === 'vercel' && <VercelWatchedProjects />}
       {connected && id === 'sentry' && <SentryWatchedProjects />}
+
+      {connected && <IntegrationTips id={id} />}
     </div>
+  );
+}
+
+// ─── Integration tips (shown when connected) ───
+
+const INTEGRATION_TIPS: Record<string, Array<{ icon: string; text: string }>> = {
+  github: [
+    { icon: '◉', text: 'Hover the notch to see your PRs, CI runs and notifications' },
+    { icon: '◎', text: 'Click any PR or action to open it directly on GitHub' },
+    { icon: '◈', text: 'Add watched repos below to filter only what matters to you' },
+    { icon: '◆', text: 'The notch pulses red when a CI run fails on your branches' },
+  ],
+  vercel: [
+    { icon: '◉', text: 'Deploys appear in real-time — see build progress as it happens' },
+    { icon: '◎', text: 'Click a deploy to open the Vercel inspector with logs' },
+    { icon: '◈', text: 'Watch specific projects below to reduce noise' },
+    { icon: '◆', text: 'Failed deploys trigger a red flash on the notch' },
+  ],
+  sentry: [
+    { icon: '◉', text: 'Unresolved issues are sorted by last seen — freshest first' },
+    { icon: '◎', text: 'Click any issue to jump to it on Sentry' },
+    { icon: '◈', text: 'Watch specific projects below to focus on what you own' },
+    { icon: '◆', text: 'The notch alerts you when 5+ new issues appear in 24h' },
+  ],
+  openai: [
+    { icon: '◉', text: 'Overview shows your estimated cost and request volume (24h)' },
+    { icon: '◎', text: 'Click the cost to open the OpenAI usage dashboard' },
+    { icon: '◈', text: 'Models tab breaks down token usage and cost per model' },
+    { icon: '◆', text: 'You get notified when spend exceeds $10 or $50 in a day' },
+  ],
+  anthropic: [
+    { icon: '◉', text: 'See token usage and sessions across all your Claude Code projects' },
+    { icon: '◎', text: 'Sessions tab shows per-project breakdown with message counts' },
+    { icon: '◈', text: 'Data refreshes automatically — covers the last 7 days' },
+    { icon: '◆', text: 'Switch between Max, Pro or API plan in the connect screen' },
+  ],
+  datadog: [
+    { icon: '◉', text: 'Active monitors are shown with their current status at a glance' },
+    { icon: '◎', text: 'Click a monitor to open it in Datadog' },
+    { icon: '◈', text: 'Monitors in Alert or Warn state appear first' },
+    { icon: '◆', text: 'The notch reacts when monitors change to alert state' },
+  ],
+  supabase: [
+    { icon: '◉', text: 'Each project shows health status, disk usage and connections' },
+    { icon: '◎', text: 'Click a project card to open it in the Supabase dashboard' },
+    { icon: '◈', text: 'Performance and security lints highlight issues to fix' },
+    { icon: '◆', text: 'You get alerted when disk usage exceeds 85% or a project is unhealthy' },
+  ],
+};
+
+function IntegrationTips({ id }: { id: string }) {
+  const tips = INTEGRATION_TIPS[id];
+  if (!tips) return null;
+
+  return (
+    <SectionCard title="How to use">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {tips.map((tip, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <span style={{ color: s.accent, fontSize: 10, marginTop: 2, flexShrink: 0 }}>{tip.icon}</span>
+            <span style={{ fontSize: 12, color: s.textSecondary, lineHeight: 1.5 }}>{tip.text}</span>
+          </div>
+        ))}
+      </div>
+    </SectionCard>
   );
 }
 
@@ -1153,7 +1397,7 @@ export function SettingsApp() {
     setConnectorConnected(id, false);
   }, [setConnectorConnected]);
 
-  const integrationIds = connectors.map((c) => c.id);
+  const integrationIds = connectors.map((c) => c.id).filter((id) => id !== 'system');
 
   return (
     <div style={{

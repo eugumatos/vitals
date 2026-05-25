@@ -61,6 +61,7 @@ export interface HoverData {
   anthropic: ServiceSnapshotData | null;
   datadog: ServiceSnapshotData | null;
   supabase: ServiceSnapshotData | null;
+  system: ServiceSnapshotData | null;
   github: {
     prs: Array<{
       number: number;

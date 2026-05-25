@@ -27,12 +27,17 @@ interface StoreSchema {
     launchAtLogin: boolean;
     pollingIntervalSec: number;
     restingMode: 'pulse' | 'glance';
+    performanceMode: 'balanced' | 'light' | 'aggressive';
   };
   license: {
     key?: string;
     instanceId?: string;
     lastValidatedAt?: number;
     machineId?: string;
+  };
+  anthropicLocal?: {
+    enabled: boolean;
+    plan: string;
   };
 }
 
@@ -56,6 +61,7 @@ async function getStore(): Promise<any> {
         launchAtLogin: false,
         pollingIntervalSec: 30,
         restingMode: 'pulse',
+        performanceMode: 'balanced',
       },
     },
   });
@@ -198,6 +204,16 @@ export async function setRestingMode(mode: string): Promise<void> {
   store.set('preferences.restingMode', mode);
 }
 
+export async function getPerformanceMode(): Promise<'balanced' | 'light' | 'aggressive'> {
+  const store = await getStore();
+  return (store.get('preferences.performanceMode') as 'balanced' | 'light' | 'aggressive') || 'balanced';
+}
+
+export async function setPerformanceMode(mode: 'balanced' | 'light' | 'aggressive'): Promise<void> {
+  const store = await getStore();
+  store.set('preferences.performanceMode', mode);
+}
+
 export async function getLicense(): Promise<{ key?: string; instanceId?: string; lastValidatedAt?: number; machineId?: string }> {
   const store = await getStore();
   return (store.get('license') as StoreSchema['license']) || {};
@@ -211,4 +227,19 @@ export async function setLicense(data: { key?: string; instanceId?: string; last
 export async function clearLicense(): Promise<void> {
   const store = await getStore();
   store.set('license', {});
+}
+
+export async function getAnthropicLocal(): Promise<{ enabled: boolean; plan: string } | null> {
+  const store = await getStore();
+  return (store.get('anthropicLocal') as StoreSchema['anthropicLocal']) || null;
+}
+
+export async function setAnthropicLocal(plan: string): Promise<void> {
+  const store = await getStore();
+  store.set('anthropicLocal', { enabled: true, plan });
+}
+
+export async function clearAnthropicLocal(): Promise<void> {
+  const store = await getStore();
+  store.delete('anthropicLocal');
 }

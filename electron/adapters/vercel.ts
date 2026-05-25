@@ -77,9 +77,14 @@ async function vercelFetch<T>(endpoint: string, token: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function fetchDeployments(token: string): Promise<VercelSnapshot['deployments']> {
+async function fetchDeployments(token: string, projectId?: string): Promise<VercelSnapshot['deployments']> {
+  const params = new URLSearchParams({
+    limit: '50',
+    state: 'BUILDING,ERROR,READY,CANCELED',
+  });
+  if (projectId) params.set('projectId', projectId);
   const result = await vercelFetch<{ deployments: VercelDeployment[] }>(
-    '/v6/deployments?limit=15&state=BUILDING,ERROR,READY,CANCELED',
+    `/v6/deployments?${params}`,
     token
   );
 
@@ -216,54 +221,33 @@ export const vercelAdapter: Adapter = {
     _cachedToken = token;
 
     const watched = await getWatchedVercelProjects();
-    const [allDeployments, projects] = await Promise.all([
-      fetchDeployments(token),
-      fetchProjects(token),
-    ]);
+    const projects = await fetchProjects(token);
 
-    // Filter by watched projects if configured
-    const deployments = watched.length > 0
-      ? allDeployments.filter((d) => watched.includes(d.project))
-      : allDeployments;
-
-    // Fetch runtime logs only — from the latest READY deploy (serving real traffic)
-    // Runtime logs = serverless function console output, HTTP request events
-    const projectNames = [...new Set(deployments.map((d) => d.project))];
-    const logsPerProject: Record<string, { runtime: VercelLogLine[]; build: VercelLogLine[] }> = {};
-
-    const logTargets = projectNames.slice(0, 3).map((name) => {
-      const latestReady = deployments.find((d) => d.project === name && d.state === 'READY');
-      return { name, deploy: latestReady };
-    }).filter((t) => t.deploy);
-
-    if (logTargets.length > 0) {
-      const emptyResult = { runtime: [] as VercelLogLine[], build: [] as VercelLogLine[] };
-      const withTimeout = (p: Promise<typeof emptyResult>, ms: number) =>
-        Promise.race([p, new Promise<typeof emptyResult>((r) => setTimeout(() => r(emptyResult), ms))]);
-
-      const results = await Promise.all(
-        logTargets.map((t) => withTimeout(fetchDeployLogs(token, t.deploy!.uid), 10_000))
+    // Fetch deployments per watched project for better coverage, or all if none watched
+    let deployments: VercelSnapshot['deployments'];
+    if (watched.length > 0) {
+      const projectIds = projects
+        .filter((p) => watched.includes(p.name))
+        .map((p) => p.id);
+      const perProject = await Promise.all(
+        projectIds.map((pid) => fetchDeployments(token, pid))
       );
-
-      for (let i = 0; i < logTargets.length; i++) {
-        const { runtime, build } = results[i];
-        // Only include runtime logs — skip build output entirely
-        if (runtime.length > 0) {
-          logsPerProject[logTargets[i].name] = { runtime, build: [] };
-          logTargets[i].deploy!.runtimeLogs = runtime;
-        }
-      }
+      deployments = perProject.flat().sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    } else {
+      deployments = await fetchDeployments(token);
     }
 
     const snapshot: Snapshot = {
       source: 'vercel',
       timestamp: Date.now(),
-      data: { deployments, projects, logsPerProject } as unknown as Record<string, any>,
+      data: { deployments, projects, logsPerProject: {} } as unknown as Record<string, any>,
     };
 
     snapshotHistory.push(snapshot);
-    if (snapshotHistory.length > 120) {
-      snapshotHistory = snapshotHistory.slice(-120);
+    if (snapshotHistory.length > 30) {
+      snapshotHistory = snapshotHistory.slice(-30);
     }
 
     return snapshot;
@@ -330,6 +314,92 @@ export async function disconnectVercel(): Promise<void> {
 
 export function getSnapshotHistory(): Snapshot[] {
   return snapshotHistory;
+}
+
+/**
+ * Fetches runtime logs on demand for a specific project (or the first watched project).
+ * Call this only when the user hovers on the Vercel card — not during regular polling.
+ */
+export async function fetchLogsOnDemand(
+  projectName?: string
+): Promise<Record<string, { runtime: VercelLogLine[]; build: VercelLogLine[] }>> {
+  const token = await getToken('vercel');
+  if (!token) throw new Error('Vercel not configured');
+
+  // Resolve which project name to use
+  let targetName = projectName;
+  if (!targetName) {
+    const watched = await getWatchedVercelProjects();
+    targetName = watched[0];
+  }
+  if (!targetName) return {};
+
+  // Find the latest READY deployment for the target project from snapshot history
+  const latest = snapshotHistory[snapshotHistory.length - 1];
+  const deployments: VercelSnapshot['deployments'] = latest
+    ? (latest.data as unknown as VercelSnapshot).deployments
+    : [];
+
+  const latestReady = deployments.find((d) => d.project === targetName && d.state === 'READY');
+  if (!latestReady) return {};
+
+  const emptyResult = { runtime: [] as VercelLogLine[], build: [] as VercelLogLine[] };
+  const withTimeout = (p: Promise<typeof emptyResult>, ms: number) =>
+    Promise.race([p, new Promise<typeof emptyResult>((r) => setTimeout(() => r(emptyResult), ms))]);
+
+  const { runtime } = await withTimeout(fetchDeployLogs(token, latestReady.uid), 5_000);
+
+  if (runtime.length === 0) return {};
+  return { [targetName]: { runtime, build: [] } };
+}
+
+export async function redeployDeployment(deploymentId: string, projectName: string, target: string): Promise<{ uid: string }> {
+  const token = await getToken('vercel');
+  if (!token) throw new Error('Vercel not configured');
+
+  console.log('[vitals] Redeploy request:', { deploymentId, projectName, target });
+
+  // Attempt 1: minimal body — just deploymentId
+  const res = await fetch(`${API_BASE}/v13/deployments?forceNew=1`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deploymentId, name: projectName }),
+  });
+
+  if (!res.ok) {
+    let msg = `${res.status}`;
+    let fullErr = '';
+    try {
+      const errBody = await res.json() as any;
+      fullErr = JSON.stringify(errBody);
+      msg = errBody?.error?.message || errBody?.message || msg;
+    } catch { /* ignore */ }
+    console.error('[vitals] Redeploy failed:', fullErr);
+    throw new Error(msg);
+  }
+  const data = await res.json() as any;
+  console.log('[vitals] Redeploy success:', data.id || data.uid);
+  return { uid: data.id || data.uid };
+}
+
+export async function cancelDeployment(deploymentId: string): Promise<void> {
+  const token = await getToken('vercel');
+  if (!token) throw new Error('Vercel not configured');
+  const res = await fetch(`${API_BASE}/v12/deployments/${deploymentId}/cancel`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Cancel failed: ${res.status}`);
+}
+
+export async function promoteDeployment(projectId: string, deploymentId: string): Promise<void> {
+  const token = await getToken('vercel');
+  if (!token) throw new Error('Vercel not configured');
+  const res = await fetch(`${API_BASE}/v10/projects/${projectId}/promote/${deploymentId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Rollback failed: ${res.status}`);
 }
 
 // --- OAuth2 Authorization Code + PKCE ---

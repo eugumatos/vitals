@@ -141,19 +141,10 @@ async function getTargetRepos(token: string): Promise<WatchedRepo[]> {
   const watched = await getWatchedRepos();
   if (watched.length > 0) {
     console.log('[vitals] Using watched repos:', watched.map(r => r.fullName).join(', '));
-    return watched;
+  } else {
+    console.log('[vitals] No watched repos configured — skipping GitHub polling');
   }
-
-  // Fallback: top N recently pushed repos (any type — includes org repos)
-  const repos = await githubFetch<any[]>(
-    `/user/repos?sort=pushed&per_page=${MAX_WATCHED_REPOS}&type=all`,
-    token
-  );
-  console.log('[vitals] No watched repos, falling back to:', repos.map((r: any) => r.full_name).join(', '));
-  return repos.map((r: any) => ({
-    fullName: r.full_name,
-    branches: [r.default_branch],
-  }));
+  return watched;
 }
 
 async function fetchPRs(token: string, targets: WatchedRepo[], login: string): Promise<GitHubSnapshot['prs']> {
@@ -178,9 +169,8 @@ async function fetchPRs(token: string, targets: WatchedRepo[], login: string): P
   const items = allPrs.map((pr: any) => {
     const authorLogin = pr.user.login;
     const isAuthor = authorLogin.toLowerCase() === login.toLowerCase();
-    const isReviewRequested = (pr.requested_reviewers || []).some(
-      (r: any) => r.login.toLowerCase() === login.toLowerCase()
-    );
+    const reviewerSet = new Set((pr.requested_reviewers || []).map((r: any) => r.login.toLowerCase()));
+    const isReviewRequested = reviewerSet.has(login.toLowerCase());
     return {
       number: pr.number,
       title: pr.title,
@@ -453,8 +443,8 @@ export const githubAdapter: Adapter = {
     };
 
     snapshotHistory.push(snapshot);
-    if (snapshotHistory.length > 120) {
-      snapshotHistory = snapshotHistory.slice(-120);
+    if (snapshotHistory.length > 30) {
+      snapshotHistory = snapshotHistory.slice(-30);
     }
 
     consecutiveErrors = 0;

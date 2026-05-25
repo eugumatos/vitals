@@ -2,5 +2,7 @@ node_modules/
 dist/
 dist-electron/
 dist-renderer/
+release/
 *.dmg
 .DS_Store
+build/icon.iconset/

@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import crypto from 'crypto';
+import { app } from 'electron';
 
 const LEMON_API = 'https://api.lemonsqueezy.com/v1/licenses';
 const GRACE_PERIOD_MS = 72 * 60 * 60 * 1000; // 72 hours
@@ -9,7 +10,8 @@ const VALID_PRODUCT_IDS = [
   1059547, // dev
 ];
 
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = !app.isPackaged;
+const isBeta = app.getVersion().includes('beta');
 
 const headers = {
   Accept: 'application/json',
@@ -52,7 +54,7 @@ export async function activateLicense(
 ): Promise<{ success: boolean; error?: string }> {
   const machineId = getMachineId();
 
-  if (isDev) {
+  if (isDev || isBeta) {
     await setLicense({
       key: licenseKey,
       instanceId: 'dev-instance',
@@ -170,7 +172,7 @@ export async function isLicenseValid(
   getLicense: () => Promise<LicenseStore>,
   setLicense: (data: LicenseStore) => Promise<void>,
 ): Promise<{ valid: boolean; error?: string; needsActivation: boolean }> {
-  if (isDev) {
+  if (isDev || isBeta) {
     return { valid: true, needsActivation: false };
   }
 

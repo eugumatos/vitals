@@ -1,6 +1,6 @@
 {
   "name": "vitals",
-  "version": "1.0.0",
+  "version": "0.1.0-beta.1",
   "description": "Observability cockpit in the MacBook notch",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,7 +10,14 @@
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build": "npm run build:renderer && npm run build:electron",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "dist:publish": "npm run build && electron-builder --publish always",
+    "dist:arm64": "npm run build && electron-builder --mac --arm64",
+    "dist:x64": "npm run build && electron-builder --mac --x64",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"electron/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +25,9 @@
   "type": "commonjs",
   "dependencies": {
     "@vitejs/plugin-react": "^6.0.1",
+    "electron-log": "^5.4.4",
     "electron-store": "^11.0.2",
+    "electron-updater": "^6.8.3",
     "framer-motion": "^12.38.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -27,16 +36,23 @@
     "zustand": "^5.0.13"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.2.4",
+    "@types/node": "^25.9.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/sql.js": "^1.4.11",
     "@types/ws": "^8.18.1",
     "electron": "^42.0.0",
     "electron-builder": "^26.8.1",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.3",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.3",
-    "vite": "^8.0.11"
+    "typescript-eslint": "^8.59.4",
+    "vite": "^8.0.11",
+    "vitest": "^4.1.7"
   },
   "build": {
     "appId": "com.vitals.app",
@@ -52,6 +68,7 @@
         }
       ],
       "category": "public.app-category.developer-tools",
+      "identity": null,
       "extendInfo": {
         "LSUIElement": true
       }
@@ -59,10 +76,15 @@
     "files": [
       "dist-electron/**/*",
       "dist-renderer/**/*",
-      "node_modules/better-sqlite3/**/*"
+      "node_modules/sql.js/dist/sql-wasm.wasm"
     ],
     "asarUnpack": [
-      "node_modules/better-sqlite3/**/*"
-    ]
+      "node_modules/sql.js/dist/sql-wasm.wasm"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "gustavomatos",
+      "repo": "Vitals"
+    }
   }
 }

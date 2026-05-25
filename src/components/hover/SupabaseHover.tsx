@@ -1,102 +1,124 @@
 import { colors, fontSize, spacing, radius } from '../../lib/design-tokens';
-import { HoverPanel } from './shared';
+import { HoverPanel, StatCell, MiniBar, BottomBar } from './shared';
+
+const statusColor = (status: string) => {
+  if (status === 'ACTIVE_HEALTHY') return colors.healthy;
+  if (status === 'ACTIVE_UNHEALTHY') return colors.incident;
+  return colors.textTertiary;
+};
+
+const statusLabel = (status: string) => {
+  if (status === 'ACTIVE_HEALTHY') return 'healthy';
+  if (status === 'ACTIVE_UNHEALTHY') return 'unhealthy';
+  if (status === 'INACTIVE') return 'paused';
+  return status.toLowerCase().replace('active_', '');
+};
+
+const diskColor = (pct: number | null) => {
+  if (pct == null) return colors.textTertiary;
+  if (pct > 90) return colors.incident;
+  if (pct > 75) return colors.anomaly;
+  return colors.healthy;
+};
+
+const connColor = (n: number | null) => {
+  if (n == null) return colors.textTertiary;
+  if (n > 50) return colors.incident;
+  if (n > 30) return colors.anomaly;
+  return colors.textSecondary;
+};
+
+function ProjectCard({ p }: { p: any }) {
+  const isUnhealthy = p.status === 'ACTIVE_UNHEALTHY';
+  const totalLints = (p.advisors?.performance ?? 0) + (p.advisors?.security ?? 0);
+
+  return (
+    <div
+      onClick={() => (window as any).vitals?.openExternal(`https://supabase.com/dashboard/project/${p.id}`)}
+      style={{
+        padding: '8px 10px',
+        borderRadius: radius.md,
+        border: `1px solid ${isUnhealthy ? 'rgba(239,68,68,0.25)' : colors.divider}`,
+        background: colors.subtle,
+        cursor: 'pointer',
+        display: 'flex', flexDirection: 'column', gap: 6,
+      }}
+    >
+      {/* Row 1: name + status */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: statusColor(p.status), flexShrink: 0 }} />
+        <span style={{ fontSize: fontSize.body, color: colors.textPrimary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
+          {p.name}
+        </span>
+        <span style={{ fontSize: 10, color: statusColor(p.status), fontWeight: 500 }}>
+          {statusLabel(p.status)}
+        </span>
+      </div>
+
+      {/* Row 2: disk bar + connections */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+        {p.diskPercent != null ? (
+          <>
+            <span style={{ fontSize: 10, color: colors.textTertiary, width: 24, flexShrink: 0 }}>disk</span>
+            <MiniBar value={p.diskPercent} max={100} color={diskColor(p.diskPercent)} />
+            <span style={{ fontSize: 10, color: diskColor(p.diskPercent), fontVariantNumeric: 'tabular-nums', flexShrink: 0, width: 28, textAlign: 'right' }}>
+              {p.diskPercent}%
+            </span>
+          </>
+        ) : (
+          <span style={{ fontSize: 10, color: colors.textTertiary }}>disk n/a</span>
+        )}
+        {p.activeConnections != null && (
+          <span style={{ fontSize: 10, color: connColor(p.activeConnections), fontVariantNumeric: 'tabular-nums', flexShrink: 0, marginLeft: 'auto' }}>
+            {p.activeConnections} conn
+          </span>
+        )}
+      </div>
+
+      {/* Row 3: functions + lints (only if present) */}
+      {(p.edgeFunctions > 0 || totalLints > 0) && (
+        <div style={{ display: 'flex', gap: 10, fontSize: 10, whiteSpace: 'nowrap' }}>
+          {p.edgeFunctions > 0 && (
+            <span style={{ color: colors.textSecondary }}>{p.edgeFunctions} fn</span>
+          )}
+          {p.advisors?.performance > 0 && (
+            <span style={{ color: colors.anomaly }}>{p.advisors.performance} perf</span>
+          )}
+          {p.advisors?.security > 0 && (
+            <span style={{ color: colors.incident }}>{p.advisors.security} sec</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function SupabaseHover({ data }: { data: any }) {
-  const projects: Array<{
-    id: string;
-    name: string;
-    region: string;
-    status: string;
-    databaseSize: string;
-    activeConnections: number;
-  }> = data?.projects ?? [];
-  const stats = data?.stats ?? { totalProjects: 0, healthy: 0, unhealthy: 0, inactive: 0 };
+  const projects: Array<any> = data?.projects ?? [];
+  const stats = data?.stats ?? {};
 
   const sorted = [...projects].sort((a, b) => {
-    if (a.status === 'UNHEALTHY' && b.status !== 'UNHEALTHY') return -1;
-    if (a.status !== 'UNHEALTHY' && b.status === 'UNHEALTHY') return 1;
+    if (a.status === 'ACTIVE_UNHEALTHY' && b.status !== 'ACTIVE_UNHEALTHY') return -1;
+    if (a.status !== 'ACTIVE_UNHEALTHY' && b.status === 'ACTIVE_UNHEALTHY') return 1;
     return 0;
   });
 
-  const connColor = (n: number) => (n > 50 ? colors.incident : n > 30 ? colors.anomaly : colors.textTertiary);
-
   return (
     <HoverPanel>
-      {/* Stats line */}
-      <div style={{ display: 'flex', gap: 14, fontSize: fontSize.body, marginBottom: spacing.sectionGap }}>
-        <span style={{ color: colors.textPrimary }}>{stats.totalProjects} projects</span>
-        {stats.healthy > 0 && <span style={{ color: colors.healthy }}>{stats.healthy} healthy</span>}
-        {stats.unhealthy > 0 && <span style={{ color: colors.incident }}>{stats.unhealthy} unhealthy</span>}
-        {stats.inactive > 0 && <span style={{ color: colors.textTertiary }}>{stats.inactive} inactive</span>}
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {sorted.map((p) => (
+            <ProjectCard key={p.id} p={p} />
+          ))}
+        </div>
       </div>
-
-      {/* Project cards */}
-      <div style={{ display: 'flex', gap: 8, overflow: 'hidden', flex: 1 }}>
-        {sorted.map((p) => {
-          const isUnhealthy = p.status?.toUpperCase() === 'UNHEALTHY';
-          const statusColor = isUnhealthy ? colors.incident : colors.healthy;
-          return (
-            <div
-              key={p.id}
-              onClick={() =>
-                (window as any).vitals?.openExternal(`https://supabase.com/dashboard/project/${p.id}`)
-              }
-              style={{
-                width: 175,
-                flexShrink: 0,
-                padding: '8px 10px',
-                borderRadius: radius.md,
-                border: `1px solid ${isUnhealthy ? 'rgba(239,68,68,0.35)' : colors.divider}`,
-                background: colors.subtle,
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 4,
-              }}
-            >
-              {/* Name */}
-              <span
-                style={{
-                  fontSize: fontSize.body,
-                  color: colors.textPrimary,
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {p.name}
-              </span>
-
-              {/* Status */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <div
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    backgroundColor: statusColor,
-                  }}
-                />
-                <span style={{ fontSize: fontSize.labelSecondary, color: statusColor, textTransform: 'uppercase' }}>
-                  {p.status}
-                </span>
-              </div>
-
-              {/* Region */}
-              <span style={{ fontSize: fontSize.labelSecondary, color: colors.textTertiary }}>{p.region}</span>
-
-              {/* DB size + connections */}
-              <div style={{ display: 'flex', gap: 8, fontSize: fontSize.labelSecondary }}>
-                <span style={{ color: colors.textSecondary }}>{p.databaseSize}</span>
-                <span style={{ color: connColor(p.activeConnections) }}>
-                  {p.activeConnections}conn
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <BottomBar>
+        <StatCell label="projects" value={String(stats.totalProjects ?? 0)} />
+        <StatCell label="healthy" value={String(stats.healthy ?? 0)} color={colors.healthy} />
+        {(stats.unhealthy ?? 0) > 0 && <StatCell label="unhealthy" value={String(stats.unhealthy)} color={colors.incident} />}
+        {(stats.totalFunctions ?? 0) > 0 && <StatCell label="fn" value={String(stats.totalFunctions)} />}
+        {(stats.totalAdvisors ?? 0) > 0 && <StatCell label="lints" value={String(stats.totalAdvisors)} color={colors.anomaly} />}
+      </BottomBar>
     </HoverPanel>
   );
 }

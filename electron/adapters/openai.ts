@@ -71,7 +71,7 @@ async function fetchUsage(token: string): Promise<OpenAISnapshot> {
   const dayAgo = now - 24 * 60 * 60;
 
   const data = await openAIFetch<any>(
-    `/organization/usage/completions?start_time=${dayAgo}&end_time=${now}&bucket_width=1d&limit=20`,
+    `/organization/usage/completions?start_time=${dayAgo}&end_time=${now}&bucket_width=1d&group_by=model&limit=20`,
     token
   );
 

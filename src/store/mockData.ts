@@ -13,6 +13,7 @@ export const emptyHoverData: HoverData = {
   anthropic: null,
   datadog: null,
   supabase: null,
+  system: null,
   github: {
     prs: [],
     actions: [],
@@ -28,4 +29,5 @@ export const mockConnectors: ConnectorConfig[] = [
   { id: 'anthropic', name: 'anthropic', connected: false, icon: 'An' },
   { id: 'datadog', name: 'datadog', connected: false, icon: 'DD' },
   { id: 'supabase', name: 'supabase', connected: false, icon: 'Sb' },
+  { id: 'system', name: 'system', connected: false, icon: 'Sys' },
 ];

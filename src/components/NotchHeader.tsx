@@ -7,12 +7,13 @@ import { formatTimeAgo } from '../lib/utils';
 // Per-integration tab definitions — each integration has its own relevant tabs
 export const integrationTabs: Record<string, string[]> = {
   github: ['prs', 'actions', 'notifications'],
-  vercel: ['deploys', 'projects'],
+  vercel: ['deploys', 'insights'],
   sentry: ['issues', 'stats'],
   openai: ['overview', 'models'],
-  anthropic: ['activity', 'models'],
+  anthropic: ['overview', 'sessions'],
   datadog: ['monitors', 'events'],
-  supabase: [],  // single view, no tabs needed
+  supabase: [],
+  system: ['overview', 'cores'],
 };
 
 // --- Icons ---
@@ -74,6 +75,16 @@ function AnthropicIcon({ size = 15 }: { size?: number }) {
   );
 }
 
+function SystemIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}>
+      <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 10.5v-7zM3.5 3a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.5-.5h-9z" />
+      <path d="M5.5 13h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1z" />
+      <path d="M8 11v2" stroke="currentColor" strokeWidth="1" />
+    </svg>
+  );
+}
+
 function PlusIcon({ size = 12 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}>
@@ -101,6 +112,7 @@ export const integrationIcons: Record<string, React.FC<{ size?: number }>> = {
   openai: OpenAIIcon,
   anthropic: AnthropicIcon,
   datadog: DatadogIcon,
+  system: SystemIcon,
 };
 
 function RefreshIcon({ size = 14, spinning = false }: { size?: number; spinning?: boolean }) {
@@ -418,6 +430,11 @@ export function NotchHeader() {
   const watchedRepos = useVitalsStore((s) => s.watchedRepos);
   const [showRepoPicker, setShowRepoPicker] = useState(false);
   const repoPickerRef = useRef<HTMLDivElement>(null);
+  const watchedVercelProjects = useVitalsStore((s) => s.watchedVercelProjects);
+  const activeVercelProject = useVitalsStore((s) => s.activeVercelProject);
+  const setActiveVercelProject = useVitalsStore((s) => s.setActiveVercelProject);
+  const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const projectPickerRef = useRef<HTMLDivElement>(null);
 
   // Close repo picker on click outside
   useEffect(() => {
@@ -430,6 +447,18 @@ export function NotchHeader() {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showRepoPicker]);
+
+  // Close project picker on click outside
+  useEffect(() => {
+    if (!showProjectPicker) return;
+    function handleClick(e: MouseEvent) {
+      if (projectPickerRef.current && !projectPickerRef.current.contains(e.target as Node)) {
+        setShowProjectPicker(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showProjectPicker]);
 
   const connectedIntegrations = connectors.filter((c) => c.connected);
 
@@ -504,7 +533,7 @@ export function NotchHeader() {
 
         {/* + add integration */}
         <button
-          onClick={() => setState('settings')}
+          onClick={() => window.vitals.openSettings()}
           style={{
             background: 'none',
             border: 'none',
@@ -635,6 +664,95 @@ export function NotchHeader() {
                   }}
                 >
                   {wr.fullName}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Project picker — only for Vercel with multiple watched projects */}
+      {activeIntegration === 'vercel' && watchedVercelProjects.length > 1 && (
+        <div style={{ position: 'relative', flexShrink: 0 }} ref={projectPickerRef}>
+          <button
+            onClick={() => setShowProjectPicker(!showProjectPicker)}
+            style={{
+              background: showProjectPicker ? 'rgba(255,255,255,0.08)' : 'none',
+              border: 'none',
+              borderRadius: 6,
+              padding: '3px 6px',
+              cursor: 'pointer',
+              color: activeVercelProject ? colors.textPrimary : colors.textTertiary,
+              fontSize: 11,
+              fontFamily: fonts.mono,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              transition: 'color 0.15s, background 0.15s',
+              maxWidth: 120,
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeVercelProject || 'all projects'}
+            </span>
+            <ChevronIcon />
+          </button>
+
+          {showProjectPicker && (
+            <div style={{
+              position: 'absolute',
+              top: 28,
+              right: 0,
+              minWidth: 180,
+              maxHeight: 220,
+              overflowY: 'auto',
+              background: '#1c1c1e',
+              border: `0.5px solid ${colors.divider}`,
+              borderRadius: 10,
+              overflow: 'hidden',
+              zIndex: 100,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            }}>
+              <button
+                onClick={() => { setActiveVercelProject(''); setShowProjectPicker(false); }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '7px 12px',
+                  background: !activeVercelProject ? 'rgba(255,255,255,0.06)' : 'transparent',
+                  border: 'none',
+                  borderBottom: `0.5px solid ${colors.divider}`,
+                  color: !activeVercelProject ? colors.action : colors.textPrimary,
+                  fontSize: 11,
+                  fontFamily: fonts.mono,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                all projects
+              </button>
+              {watchedVercelProjects.map((project) => (
+                <button
+                  key={project}
+                  onClick={() => { setActiveVercelProject(project); setShowProjectPicker(false); }}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    padding: '7px 12px',
+                    background: activeVercelProject === project ? 'rgba(255,255,255,0.06)' : 'transparent',
+                    border: 'none',
+                    borderBottom: `0.5px solid ${colors.divider}`,
+                    color: activeVercelProject === project ? colors.action : colors.textPrimary,
+                    fontSize: 11,
+                    fontFamily: fonts.mono,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {project}
                 </button>
               ))}
             </div>

@@ -9,13 +9,14 @@ import {
   AnthropicHover,
   DatadogHover,
   SupabaseHover,
+  SystemMonitorHover,
 } from '../hover';
 import { StreakBar } from '../hover/StreakBar';
 
 export function Hover() {
   const { hoverData, connectors, activeIntegration } = useVitalsStore();
   const setState = useVitalsStore((s) => s.setState);
-  const lastPolledAt = useVitalsStore((s) => s.lastPolledAt);
+  const polledServices = useVitalsStore((s) => s.polledServices);
 
   const hasAnyConnected = connectors.some((c) => c.connected);
 
@@ -61,11 +62,12 @@ export function Hover() {
       case 'vercel': return hoverData.vercel != null && hoverData.vercel.deployments.length > 0;
       case 'sentry': return hoverData.sentry != null;
       case 'anthropic': return hoverData.anthropic?.data?.totals != null;
+      case 'system': return hoverData.system?.data != null;
       default: return hoverData[activeIntegration as keyof typeof hoverData] != null && (hoverData[activeIntegration as keyof typeof hoverData] as any)?.data != null;
     }
   })();
 
-  const isLoading = isConnected && !hasData && !lastPolledAt;
+  const isLoading = isConnected && !hasData && !polledServices.has(activeIntegration);
 
   // Loading skeleton
   if (isLoading) {
@@ -131,6 +133,8 @@ export function Hover() {
         return <DatadogHover data={hoverData.datadog!.data} />;
       case 'supabase':
         return <SupabaseHover data={hoverData.supabase!.data} />;
+      case 'system':
+        return <SystemMonitorHover data={hoverData.system!.data} />;
       default:
         return null;
     }

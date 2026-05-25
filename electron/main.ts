@@ -1,3 +1,4 @@
+import './logger';
 import {
   app,
   BrowserWindow,
@@ -37,6 +38,8 @@ import {
   setSentryToken,
   disconnectSentry,
   listSentryProjects,
+  startOAuthFlow as startSentryOAuth,
+  cancelOAuthFlow as cancelSentryOAuth,
 } from './adapters/sentry';
 import {
   openaiAdapter,
@@ -49,6 +52,8 @@ import {
   initAdapter as initAnthropicAdapter,
   setAnthropicToken,
   disconnectAnthropic,
+  enableLocalMode as enableAnthropicLocalMode,
+  isLocalMode as isAnthropicLocalMode,
 } from './adapters/anthropic';
 import {
   datadogAdapter,
@@ -62,7 +67,9 @@ import {
   setSupabaseToken,
   disconnectSupabase,
 } from './adapters/supabase';
-import { removeToken, getAllTokenStatus, getWatchedRepos, setWatchedRepos, getWatchedVercelProjects, setWatchedVercelProjects, getWatchedSentryProjects, setWatchedSentryProjects, getPollingInterval, setPollingInterval as setPollingIntervalStore, getRestingMode, setRestingMode as setRestingModeStore, getLaunchAtLogin, setLaunchAtLogin as setLaunchAtLoginStore, getSmartSilence, setSmartSilence as setSmartSilenceStore, isInSilenceWindow, getLicense, setLicense, clearLicense } from './store';
+import { systemMonitorAdapter } from './adapters/system-monitor';
+import { removeToken, getAllTokenStatus, getWatchedRepos, setWatchedRepos, getWatchedVercelProjects, setWatchedVercelProjects, getWatchedSentryProjects, setWatchedSentryProjects, getPollingInterval, setPollingInterval as setPollingIntervalStore, getRestingMode, setRestingMode as setRestingModeStore, getLaunchAtLogin, setLaunchAtLogin as setLaunchAtLoginStore, getSmartSilence, setSmartSilence as setSmartSilenceStore, isInSilenceWindow, getLicense, setLicense, clearLicense, getPerformanceMode } from './store';
+import os from 'os';
 import type { SmartSilenceConfig } from './store';
 import type { WatchedRepo } from './store';
 import { isLicenseValid, activateLicense, deactivateLicense } from './license';
@@ -70,6 +77,8 @@ import { migrateFromElectronStore } from './secure-store';
 import { addDeploy, closeHistoryDb } from './history-store';
 import type { DeployEvent } from './history-store';
 import { getStreakData, initStreakEngine, invalidateStreakCache } from './streak-engine';
+import { autoUpdater } from 'electron-updater';
+import log from './logger';
 
 // Smart silence — cached config for fast checks during polling
 let cachedSilenceConfig: SmartSilenceConfig = { enabled: false, startHour: 19, endHour: 8, weekends: true };
@@ -81,6 +90,112 @@ function sendSnapshot(channel: string, data: any): void {
   mainWindow.webContents.send(channel, { ...data, _silenced: silenced });
 }
 
+// ─── Adaptive Polling Engine ───
+// Tracks visibility state and adjusts polling intervals accordingly
+
+type PerformanceMode = 'balanced' | 'light' | 'aggressive';
+let _performanceMode: PerformanceMode = 'balanced';
+let _windowVisible = false; // true when hover is active (window shown)
+
+// Previous snapshot hashes per adapter — for "nothing changed" detection
+const _prevSnapshotHashes: Map<string, string> = new Map();
+const _unchangedCounts: Map<string, number> = new Map();
+
+/** Compute a simple hash to detect if snapshot data changed */
+function quickHash(data: any): string {
+  return JSON.stringify(data).length + ':' + JSON.stringify(data).slice(0, 200);
+}
+
+/** Get polling interval multiplier based on current state */
+function getPollingMultiplier(adapterName: string): number {
+  const silenced = isInSilenceWindow(cachedSilenceConfig);
+
+  // In silence window: poll very infrequently
+  if (silenced) return 4; // 4x base interval
+
+  // Performance mode multipliers
+  const modeMultiplier = _performanceMode === 'aggressive' ? 4 : _performanceMode === 'light' ? 2 : 1;
+
+  // Window not visible (resting): double the interval
+  const visibilityMultiplier = _windowVisible ? 1 : 2;
+
+  // "Nothing changed" backoff — up to 5min cap handled at call site
+  const unchanged = _unchangedCounts.get(adapterName) || 0;
+  const backoffMultiplier = unchanged >= 3 ? 2 : 1; // double after 3 unchanged polls
+
+  return modeMultiplier * visibilityMultiplier * backoffMultiplier;
+}
+
+/** Get adaptive interval (ms) for a given adapter, with max cap of 5 minutes */
+function getAdaptiveInterval(adapterName: string, baseMs: number): number {
+  const multiplier = getPollingMultiplier(adapterName);
+  return Math.min(baseMs * multiplier, 5 * 60 * 1000); // cap at 5 min
+}
+
+/** Get system monitor interval based on visibility */
+function getSystemMonitorInterval(): number {
+  if (_performanceMode === 'aggressive') return 0; // disabled
+  if (_performanceMode === 'light') return 15_000;
+  // balanced: 5s when visible, 10s when hidden
+  return _windowVisible ? 5_000 : 10_000;
+}
+
+/** Track if snapshot changed; returns true if data is different from last poll */
+function trackSnapshotChange(adapterName: string, data: any): boolean {
+  const hash = quickHash(data);
+  const prev = _prevSnapshotHashes.get(adapterName);
+  _prevSnapshotHashes.set(adapterName, hash);
+
+  if (prev === hash) {
+    _unchangedCounts.set(adapterName, (_unchangedCounts.get(adapterName) || 0) + 1);
+    return false;
+  }
+  _unchangedCounts.set(adapterName, 0);
+  return true;
+}
+
+/** Auto-detect if machine is resource-constrained and set light mode */
+async function autoDetectPerformanceMode(): Promise<void> {
+  const totalRam = os.totalmem();
+  const cpuCores = os.cpus().length;
+  const ramGb = totalRam / (1024 * 1024 * 1024);
+
+  if (ramGb < 8 || cpuCores < 4) {
+    const stored = await getPerformanceMode();
+    // Only auto-set if user hasn't explicitly chosen a mode
+    if (stored === 'balanced') {
+      _performanceMode = 'light';
+      console.log('[vitals] Auto-detected resource-constrained machine (RAM: %.1fGB, Cores: %d) — using light mode', ramGb, cpuCores);
+    }
+  }
+}
+
+// ─── IPC Batching ───
+// Accumulate snapshot sends and flush every 500ms
+
+let _ipcBatchBuffer: Array<{ channel: string; data: any }> = [];
+let _ipcBatchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function queueIpcSend(channel: string, data: any): void {
+  _ipcBatchBuffer.push({ channel, data });
+  if (!_ipcBatchTimer) {
+    _ipcBatchTimer = setTimeout(flushIpcBatch, 500);
+  }
+}
+
+function flushIpcBatch(): void {
+  _ipcBatchTimer = null;
+  if (!mainWindow || mainWindow.isDestroyed() || _ipcBatchBuffer.length === 0) {
+    _ipcBatchBuffer = [];
+    return;
+  }
+  // Send each buffered message (batched in time, not combined — keeps channel semantics)
+  for (const { channel, data } of _ipcBatchBuffer) {
+    mainWindow.webContents.send(channel, data);
+  }
+  _ipcBatchBuffer = [];
+}
+
 // Polling timers
 let vercelPollingInterval: ReturnType<typeof setTimeout> | null = null;
 let sentryPollingInterval: ReturnType<typeof setTimeout> | null = null;
@@ -88,13 +203,14 @@ let openaiPollingInterval: ReturnType<typeof setTimeout> | null = null;
 let anthropicPollingInterval: ReturnType<typeof setTimeout> | null = null;
 let datadogPollingInterval: ReturnType<typeof setTimeout> | null = null;
 let supabasePollingInterval: ReturnType<typeof setTimeout> | null = null;
+let systemMonitorPollingInterval: ReturnType<typeof setTimeout> | null = null;
 
 let mainWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let activationWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = !app.isPackaged;
 const WINDOW_HEIGHT = 480;
 const PROTOCOL = 'vitals';
 
@@ -350,13 +466,15 @@ function setupIPC(): void {
     }
   });
 
-  // Mouse events
+  // Mouse events — also track visibility state for adaptive polling
   ipcMain.on('set-ignore-mouse-events', (_event, ignore: boolean) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (ignore) {
       mainWindow.setIgnoreMouseEvents(true, { forward: true });
+      _windowVisible = false;
     } else {
       mainWindow.setIgnoreMouseEvents(false);
+      _windowVisible = true;
     }
   });
 
@@ -536,8 +654,41 @@ function setupIPC(): void {
 
   ipcMain.handle('vercel:set-watched-projects', async (_event, projects: string[]) => {
     await setWatchedVercelProjects(projects);
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'vercel');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('data:clear', 'vercel');
+      mainWindow.webContents.send('watched-vercel-projects:changed', projects);
+    }
     return { success: true };
+  });
+
+  ipcMain.handle('vercel:redeploy', async (_event, deploymentId: string, projectName: string, target: string) => {
+    try {
+      const { redeployDeployment } = await import('./adapters/vercel');
+      const result = await redeployDeployment(deploymentId, projectName, target);
+      return { success: true, data: result };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('vercel:cancel', async (_event, deploymentId: string) => {
+    try {
+      const { cancelDeployment } = await import('./adapters/vercel');
+      await cancelDeployment(deploymentId);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('vercel:rollback', async (_event, projectId: string, deploymentId: string) => {
+    try {
+      const { promoteDeployment } = await import('./adapters/vercel');
+      await promoteDeployment(projectId, deploymentId);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
   });
 
   // Sentry adapter IPC
@@ -550,6 +701,28 @@ function setupIPC(): void {
     } catch (err) {
       return { success: false, error: String(err) };
     }
+  });
+
+  ipcMain.handle('sentry:start-oauth', async (_event, clientId: string, clientSecret: string) => {
+    try {
+      await startSentryOAuth(clientId, clientSecret);
+      startSentryPolling();
+      broadcastConnectorStatus();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('sentry:oauth-success');
+      }
+      if (settingsWindow && !settingsWindow.isDestroyed()) {
+        settingsWindow.webContents.send('sentry:oauth-success');
+      }
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('sentry:cancel-oauth', () => {
+    cancelSentryOAuth();
+    return { success: true };
   });
 
   ipcMain.handle('sentry:disconnect', async () => {
@@ -635,6 +808,23 @@ function setupIPC(): void {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:clear', 'anthropic');
     broadcastConnectorStatus();
     return { success: true };
+  });
+
+  ipcMain.handle('anthropic:enable-local', async (_event, plan?: string) => {
+    try {
+      const success = await enableAnthropicLocalMode(plan);
+      if (success) {
+        startAnthropicPolling();
+        broadcastConnectorStatus();
+      }
+      return { success };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('anthropic:is-local-mode', () => {
+    return isAnthropicLocalMode();
   });
 
   ipcMain.handle('anthropic:get-snapshot', async () => {
@@ -762,6 +952,23 @@ function setupIPC(): void {
     return isInSilenceWindow(cachedSilenceConfig);
   });
 
+  ipcMain.handle('preferences:get-performance-mode', async () => {
+    return _performanceMode;
+  });
+
+  ipcMain.handle('preferences:set-performance-mode', async (_event, mode: string) => {
+    const { setPerformanceMode } = await import('./store');
+    await setPerformanceMode(mode as 'balanced' | 'light' | 'aggressive');
+    _performanceMode = mode as PerformanceMode;
+    return { success: true };
+  });
+
+  // Vercel logs on demand — only fetch when user hovers
+  ipcMain.handle('vercel:fetch-logs', async (_event, projectName?: string) => {
+    const { fetchLogsOnDemand } = await import('./adapters/vercel');
+    return fetchLogsOnDemand(projectName);
+  });
+
   // Open settings in a separate window
   ipcMain.handle('open-settings', () => {
     openSettingsWindow();
@@ -813,6 +1020,11 @@ function setupIPC(): void {
     return getStreakData();
   });
 
+  // Log path
+  ipcMain.handle('app:log-path', () => {
+    return log.transports.file.getFile().path;
+  });
+
   // Quit app
   ipcMain.handle('app:quit', () => {
     app.quit();
@@ -820,13 +1032,21 @@ function setupIPC(): void {
 
   // Connector status
   ipcMain.handle('connectors:status', async () => {
-    return await getAllTokenStatus();
+    const status = await getAllTokenStatus();
+    if (isAnthropicLocalMode()) status.anthropic = true;
+    return { ...status, system: true };
   });
 
   async function broadcastConnectorStatus() {
     const status = await getAllTokenStatus();
+    status.system = true;
+    // Local mode counts as connected
+    if (isAnthropicLocalMode()) status.anthropic = true;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('connectors:changed', status);
+    }
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.webContents.send('connectors:changed', status);
     }
   }
 
@@ -840,7 +1060,16 @@ function setupIPC(): void {
       { name: 'anthropic', adapter: anthropicAdapter },
       { name: 'datadog', adapter: datadogAdapter },
       { name: 'supabase', adapter: supabaseAdapter },
+      { name: 'system', adapter: systemMonitorAdapter },
     ];
+
+    // Reset backoff state — user explicitly wants fresh data
+    _prevSnapshotHashes.clear();
+    _unchangedCounts.clear();
+
+    // Tell Supabase to do a full refresh (all projects, with advisors)
+    const { resetForFullRefresh } = await import('./adapters/supabase');
+    resetForFullRefresh();
 
     const tasks = adapters
       .filter(({ adapter }) => adapter.isConfigured())
@@ -890,17 +1119,20 @@ async function startGitHubPolling(): Promise<void> {
 
 async function startVercelPolling(): Promise<void> {
   if (!vercelAdapter.isConfigured()) return;
-  const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting Vercel polling, interval:', intervalMs / 1000, 's');
+  const baseIntervalMs = (await getPollingInterval()) * 1000;
+  console.log('[vitals] Starting Vercel polling, base interval:', baseIntervalMs / 1000, 's');
 
   stopVercelPolling();
 
   async function poll() {
     try {
       const snapshot = await vercelAdapter.fetchSnapshot();
-      console.log('[vitals] Vercel snapshot received, deploys:', (snapshot.data as any)?.deployments?.length);
+      const changed = trackSnapshotChange('vercel', snapshot.data);
+      if (changed) {
+        console.log('[vitals] Vercel snapshot received, deploys:', (snapshot.data as any)?.deployments?.length);
+      }
       if (mainWindow) {
-        mainWindow.webContents.send('vercel:snapshot', snapshot);
+        queueIpcSend('vercel:snapshot', snapshot);
       }
 
       // Persist completed deploys to history for streak calculation
@@ -940,7 +1172,8 @@ async function startVercelPolling(): Promise<void> {
         mainWindow.webContents.send('vercel:error', err.message);
       }
     } finally {
-      vercelPollingInterval = setTimeout(poll, intervalMs);
+      const nextInterval = getAdaptiveInterval('vercel', baseIntervalMs);
+      vercelPollingInterval = setTimeout(poll, nextInterval);
     }
   }
 
@@ -956,17 +1189,17 @@ function stopVercelPolling(): void {
 
 async function startSentryPolling(): Promise<void> {
   if (!sentryAdapter.isConfigured()) return;
-  const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting Sentry polling, interval:', intervalMs / 1000, 's');
+  const baseIntervalMs = (await getPollingInterval()) * 1000;
+  console.log('[vitals] Starting Sentry polling, base interval:', baseIntervalMs / 1000, 's');
 
   stopSentryPolling();
 
   async function poll() {
     try {
       const snapshot = await sentryAdapter.fetchSnapshot();
-      console.log('[vitals] Sentry snapshot received, issues:', (snapshot.data as any)?.issues?.length);
+      trackSnapshotChange('sentry', snapshot.data);
       if (mainWindow) {
-        mainWindow.webContents.send('sentry:snapshot', snapshot);
+        queueIpcSend('sentry:snapshot', snapshot);
       }
     } catch (err: any) {
       console.error('[vitals] Sentry polling error:', err.message);
@@ -974,7 +1207,7 @@ async function startSentryPolling(): Promise<void> {
         mainWindow.webContents.send('sentry:error', err.message);
       }
     } finally {
-      sentryPollingInterval = setTimeout(poll, intervalMs);
+      sentryPollingInterval = setTimeout(poll, getAdaptiveInterval('sentry', baseIntervalMs));
     }
   }
 
@@ -990,21 +1223,21 @@ function stopSentryPolling(): void {
 
 async function startOpenAIPolling(): Promise<void> {
   if (!openaiAdapter.isConfigured()) return;
-  const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting OpenAI polling, interval:', intervalMs / 1000, 's');
+  const baseIntervalMs = (await getPollingInterval()) * 1000;
+  console.log('[vitals] Starting OpenAI polling, base interval:', baseIntervalMs / 1000, 's');
 
   stopOpenAIPolling();
 
   async function poll() {
     try {
       const snapshot = await openaiAdapter.fetchSnapshot();
-      console.log('[vitals] OpenAI snapshot received');
-      if (mainWindow) mainWindow.webContents.send('openai:snapshot', snapshot);
+      trackSnapshotChange('openai', snapshot.data);
+      if (mainWindow) queueIpcSend('openai:snapshot', snapshot);
     } catch (err: any) {
       console.error('[vitals] OpenAI polling error:', err.message);
       if (mainWindow) mainWindow.webContents.send('openai:error', err.message);
     } finally {
-      openaiPollingInterval = setTimeout(poll, intervalMs);
+      openaiPollingInterval = setTimeout(poll, getAdaptiveInterval('openai', baseIntervalMs));
     }
   }
 
@@ -1020,21 +1253,21 @@ function stopOpenAIPolling(): void {
 
 async function startAnthropicPolling(): Promise<void> {
   if (!anthropicAdapter.isConfigured()) return;
-  const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting Anthropic polling, interval:', intervalMs / 1000, 's');
+  const baseIntervalMs = (await getPollingInterval()) * 1000;
+  console.log('[vitals] Starting Anthropic polling, base interval:', baseIntervalMs / 1000, 's');
 
   stopAnthropicPolling();
 
   async function poll() {
     try {
       const snapshot = await anthropicAdapter.fetchSnapshot();
-      console.log('[vitals] Anthropic snapshot received');
-      if (mainWindow) mainWindow.webContents.send('anthropic:snapshot', snapshot);
+      trackSnapshotChange('anthropic', snapshot.data);
+      if (mainWindow) queueIpcSend('anthropic:snapshot', snapshot);
     } catch (err: any) {
       console.error('[vitals] Anthropic polling error:', err.message);
       if (mainWindow) mainWindow.webContents.send('anthropic:error', err.message);
     } finally {
-      anthropicPollingInterval = setTimeout(poll, intervalMs);
+      anthropicPollingInterval = setTimeout(poll, getAdaptiveInterval('anthropic', baseIntervalMs));
     }
   }
 
@@ -1050,21 +1283,21 @@ function stopAnthropicPolling(): void {
 
 async function startDatadogPolling(): Promise<void> {
   if (!datadogAdapter.isConfigured()) return;
-  const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting Datadog polling, interval:', intervalMs / 1000, 's');
+  const baseIntervalMs = (await getPollingInterval()) * 1000;
+  console.log('[vitals] Starting Datadog polling, base interval:', baseIntervalMs / 1000, 's');
 
   stopDatadogPolling();
 
   async function poll() {
     try {
       const snapshot = await datadogAdapter.fetchSnapshot();
-      console.log('[vitals] Datadog snapshot received');
-      if (mainWindow) mainWindow.webContents.send('datadog:snapshot', snapshot);
+      trackSnapshotChange('datadog', snapshot.data);
+      if (mainWindow) queueIpcSend('datadog:snapshot', snapshot);
     } catch (err: any) {
       console.error('[vitals] Datadog polling error:', err.message);
       if (mainWindow) mainWindow.webContents.send('datadog:error', err.message);
     } finally {
-      datadogPollingInterval = setTimeout(poll, intervalMs);
+      datadogPollingInterval = setTimeout(poll, getAdaptiveInterval('datadog', baseIntervalMs));
     }
   }
 
@@ -1080,21 +1313,21 @@ function stopDatadogPolling(): void {
 
 async function startSupabasePolling(): Promise<void> {
   if (!supabaseAdapter.isConfigured()) return;
-  const intervalMs = (await getPollingInterval()) * 1000;
-  console.log('[vitals] Starting Supabase polling, interval:', intervalMs / 1000, 's');
+  const baseIntervalMs = (await getPollingInterval()) * 1000;
+  console.log('[vitals] Starting Supabase polling, base interval:', baseIntervalMs / 1000, 's');
 
   stopSupabasePolling();
 
   async function poll() {
     try {
       const snapshot = await supabaseAdapter.fetchSnapshot();
-      console.log('[vitals] Supabase snapshot received');
-      if (mainWindow) mainWindow.webContents.send('supabase:snapshot', snapshot);
+      trackSnapshotChange('supabase', snapshot.data);
+      if (mainWindow) queueIpcSend('supabase:snapshot', snapshot);
     } catch (err: any) {
       console.error('[vitals] Supabase polling error:', err.message);
       if (mainWindow) mainWindow.webContents.send('supabase:error', err.message);
     } finally {
-      supabasePollingInterval = setTimeout(poll, intervalMs);
+      supabasePollingInterval = setTimeout(poll, getAdaptiveInterval('supabase', baseIntervalMs));
     }
   }
 
@@ -1108,6 +1341,40 @@ function stopSupabasePolling(): void {
   }
 }
 
+async function startSystemMonitorPolling(): Promise<void> {
+  const intervalMs = getSystemMonitorInterval();
+  if (intervalMs === 0) {
+    console.log('[vitals] System Monitor disabled (aggressive mode)');
+    return;
+  }
+  console.log('[vitals] Starting System Monitor polling, interval:', intervalMs / 1000, 's');
+
+  stopSystemMonitorPolling();
+
+  async function poll() {
+    const currentInterval = getSystemMonitorInterval();
+    if (currentInterval === 0) return; // mode changed to aggressive
+
+    try {
+      const snapshot = await systemMonitorAdapter.fetchSnapshot();
+      if (mainWindow) mainWindow.webContents.send('system:snapshot', snapshot);
+    } catch (err: any) {
+      console.error('[vitals] System Monitor polling error:', err.message);
+    } finally {
+      systemMonitorPollingInterval = setTimeout(poll, currentInterval);
+    }
+  }
+
+  poll();
+}
+
+function stopSystemMonitorPolling(): void {
+  if (systemMonitorPollingInterval) {
+    clearTimeout(systemMonitorPollingInterval);
+    systemMonitorPollingInterval = null;
+  }
+}
+
 function startAllPolling(): void {
   const pollingStarters = [
     { configured: githubAdapter.isConfigured(), start: startGitHubPolling },
@@ -1117,9 +1384,11 @@ function startAllPolling(): void {
     { configured: anthropicAdapter.isConfigured(), start: startAnthropicPolling },
     { configured: datadogAdapter.isConfigured(), start: startDatadogPolling },
     { configured: supabaseAdapter.isConfigured(), start: startSupabasePolling },
+    { configured: true, start: startSystemMonitorPolling },
   ];
   const activeStarters = pollingStarters.filter((s) => s.configured);
-  const staggerMs = activeStarters.length > 1 ? 2000 : 0;
+  // Distribute polls uniformly: if 6 adapters, stagger ~5s apart to avoid burst
+  const staggerMs = activeStarters.length > 1 ? Math.round(10_000 / activeStarters.length) : 0;
   activeStarters.forEach((s, i) => {
     setTimeout(() => s.start().catch((err: any) => console.error('[vitals] Polling start error:', err)), i * staggerMs);
   });
@@ -1178,6 +1447,8 @@ app.on('ready', async () => {
   await Promise.allSettled([initGitHubAdapter(), initVercelAdapter(), initSentryAdapter(), initOpenAIAdapter(), initAnthropicAdapter(), initDatadogAdapter(), initSupabaseAdapter()]);
   // Sync preferences on startup
   cachedSilenceConfig = await getSmartSilence();
+  _performanceMode = await getPerformanceMode() as PerformanceMode;
+  await autoDetectPerformanceMode();
   const launchEnabled = await getLaunchAtLogin();
   app.setLoginItemSettings({ openAtLogin: launchEnabled });
 
@@ -1202,6 +1473,14 @@ app.on('ready', async () => {
       mainWindow.webContents.send('streaks:updated', await getStreakData());
     }
   });
+
+  // Auto-updater — unsigned builds need signature verification skipped
+  process.env.ELECTRON_SKIP_BINARY_SIGNATURE_VERIFICATION = '1';
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = log;
+  autoUpdater.checkForUpdates().catch(() => {});
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
 });
 
 app.on('will-quit', () => {
@@ -1212,6 +1491,7 @@ app.on('will-quit', () => {
   stopAnthropicPolling();
   stopDatadogPolling();
   stopSupabasePolling();
+  stopSystemMonitorPolling();
   globalShortcut.unregisterAll();
   closeHistoryDb();
 });

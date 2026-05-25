@@ -8,9 +8,28 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  check:
+    name: Build check
     runs-on: macos-latest
+    if: "!startsWith(github.ref, 'refs/tags/v')"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  release:
+    name: Release (${{ matrix.arch }})
+    runs-on: macos-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     strategy:
+      fail-fast: false
       matrix:
         arch: [arm64, x64]
     steps:
@@ -22,23 +41,9 @@ jobs:
           cache: npm
 
       - run: npm ci
-
       - run: npm run build
 
-      - name: Build DMG
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Build & Publish DMG
         run: npx electron-builder --mac --${{ matrix.arch }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build DMG (PR check)
-        if: "!startsWith(github.ref, 'refs/tags/v')"
-        run: npx electron-builder --mac --${{ matrix.arch }}
-
-      - name: Upload artifact
-        if: "!startsWith(github.ref, 'refs/tags/v')"
-        uses: actions/upload-artifact@v4
-        with:
-          name: vitals-${{ matrix.arch }}
-          path: release/*.dmg
-          if-no-files-found: ignore

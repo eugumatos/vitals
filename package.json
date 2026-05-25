@@ -83,8 +83,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "gustavomatos",
-      "repo": "Vitals"
+      "owner": "eugumatos",
+      "repo": "vitals"
     }
   }
 }
